@@ -182,17 +182,26 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       offExit()
       onDataDisposable.dispose()
       /*
-       * Terminal.dispose() disposes its own addons, and disposing the WebGL one
-       * first left it half torn down for that pass — it threw on internals that
-       * were already gone. Renaming a session unmounts a pane, so the throw
-       * escaped a React cleanup and took the whole root down with it.
+       * The WebGL addon goes first and on its own: letting Terminal.dispose()
+       * tear it down reaches for render services the terminal has already
+       * released, and it throws. Disposing it here means xterm's own pass finds
+       * it already gone and skips it.
+       *
+       * Both are still guarded. Renaming a session unmounts a pane, so a throw
+       * escaping this cleanup takes the whole React root with it — that is the
+       * blank window, with every attached terminal lost.
        */
+      try {
+        webgl?.dispose()
+      } catch {
+        // Already torn down by a context loss, or never fully initialised.
+      }
+      webgl = null
       try {
         term.dispose()
       } catch (err) {
         console.warn(`[rippon] terminal ${id} failed to dispose cleanly:`, err)
       }
-      webgl = null
       termRef.current = null
       fitRef.current = null
       // Unmount means the tab is gone; drop the ssh client. The tmux session
