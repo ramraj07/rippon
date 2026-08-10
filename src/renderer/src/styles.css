@@ -1,0 +1,437 @@
+:root {
+  --bg: #14161a;
+  --bg-raised: #1b1e24;
+  --bg-input: #0e1014;
+  --border: #2a2f38;
+  --text: #d7dae0;
+  --text-dim: #8b93a1;
+  --accent: #7aa2f7;
+  --danger: #f7768e;
+  --ok: #9ece6a;
+  --header-h: 30px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  user-select: none;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------- titlebar + tabs ---------- */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 8px 0 84px; /* leave room for the macOS traffic lights */
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #23272f;
+  color: var(--text-dim);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  background: #2a2f38;
+}
+
+.tab-active {
+  background: #303643;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-gear,
+.tab-close,
+.tab-add {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tab-gear:hover,
+.tab-close:hover,
+.tab-add:hover {
+  opacity: 1;
+}
+
+.tab-add {
+  font-size: 16px;
+  opacity: 0.6;
+  padding: 2px 8px;
+  -webkit-app-region: no-drag;
+}
+
+.config-path {
+  -webkit-app-region: no-drag;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  direction: rtl;
+}
+
+.config-path:hover {
+  color: var(--text);
+}
+
+.error-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #3a1f26;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.error-bar button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* ---------- panes ---------- */
+
+.tabs-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-panel {
+  position: absolute;
+  inset: 0;
+  flex-direction: row;
+}
+
+.split-left {
+  min-width: 0;
+  height: 100%;
+}
+
+.split-right {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.splitter {
+  width: 6px;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.splitter:hover {
+  background: var(--accent);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: #101216;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--header-h);
+  flex: 0 0 var(--header-h);
+  padding: 0 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.pane-title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.pane-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex: 0 0 auto;
+}
+
+.dot-running {
+  background: var(--ok);
+}
+
+.dot-connecting {
+  background: #e0af68;
+}
+
+.dot-exited {
+  background: var(--danger);
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: #2a2f38;
+  color: var(--text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0 6px;
+  overflow: hidden;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
+/* ---------- browser ---------- */
+
+.address-form {
+  flex: 1;
+  display: flex;
+}
+
+.address-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  user-select: text;
+  outline: none;
+}
+
+.address-input:focus {
+  border-color: var(--accent);
+}
+
+.webview-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: #fff;
+}
+
+.webview {
+  flex: 1;
+  min-width: 0;
+}
+
+.webview-hidden {
+  visibility: hidden;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--text-dim);
+}
+
+.empty button {
+  background: var(--accent);
+  border: none;
+  border-radius: 5px;
+  color: #10131a;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+/* ---------- modal ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  width: 460px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 18px 20px 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.modal label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal input[type='text'],
+.modal input:not([type]) {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 13px;
+  user-select: text;
+  outline: none;
+}
+
+.modal input:focus {
+  border-color: var(--accent);
+}
+
+.modal small {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modal-actions button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #262b33;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.modal-actions .primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10131a;
+  font-weight: 600;
+}
+
+.modal-actions .danger {
+  color: var(--danger);
+  border-color: #4a2b33;
+  background: transparent;
+}
