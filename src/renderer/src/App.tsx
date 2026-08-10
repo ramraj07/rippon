@@ -411,28 +411,37 @@ export default function App(): JSX.Element {
 
   // ---------- menus ----------
 
-  const sessionMenu = useCallback(
-    (name: string, x: number, y: number) => {
-      setCtx({
-        x,
-        y,
-        items: [
-          { label: 'Rename session…', onClick: () => setDialog({ kind: 'rename-session', name }) },
-          {
-            label: tiled ? 'Clear tile' : 'Close tab…',
-            onClick: () =>
-              tiled ? hideSession(name) : setDialog({ kind: 'close-session', name })
-          },
-          {
-            label: 'Kill session…',
-            danger: true,
-            separator: true,
-            onClick: () => setDialog({ kind: 'close-session', name })
-          }
-        ]
-      })
+  const sessionMenuItems = useCallback(
+    (name: string): MenuItem[] => {
+      return [
+        { label: 'Rename session…', onClick: () => setDialog({ kind: 'rename-session', name }) },
+        {
+          label: tiled ? 'Clear tile' : 'Close tab…',
+          onClick: () => (tiled ? hideSession(name) : setDialog({ kind: 'close-session', name }))
+        },
+        {
+          label: 'Kill session…',
+          danger: true,
+          separator: true,
+          onClick: () => setDialog({ kind: 'close-session', name })
+        }
+      ]
     },
     [hideSession, tiled]
+  )
+
+  const sessionMenu = useCallback(
+    (name: string, x: number, y: number) => setCtx({ x, y, items: sessionMenuItems(name) }),
+    [sessionMenuItems]
+  )
+
+  /** Terminal actions first, then everything the session itself offers. */
+  const terminalMenu = useCallback(
+    (name: string, x: number, y: number, items: MenuItem[]) => {
+      const session = sessionMenuItems(name)
+      setCtx({ x, y, items: [...items, { ...session[0], separator: true }, ...session.slice(1)] })
+    },
+    [sessionMenuItems]
   )
 
   const viewMenu = useCallback(
@@ -806,6 +815,7 @@ export default function App(): JSX.Element {
                 onUpdate={updateSession}
                 onRename={() => setDialog({ kind: 'rename-session', name: s.name })}
                 onContextMenu={(x, y) => sessionMenu(s.name, x, y)}
+                onTerminalMenu={terminalMenu}
               />
             )
           })}
@@ -936,6 +946,7 @@ interface SessionPaneProps {
   onUpdate(name: string, patch: Partial<SessionConfig>): void
   onRename(): void
   onContextMenu(x: number, y: number): void
+  onTerminalMenu(name: string, x: number, y: number, items: MenuItem[]): void
 }
 
 function SessionPane({
@@ -955,7 +966,8 @@ function SessionPane({
   onSelect,
   onUpdate,
   onRename,
-  onContextMenu
+  onContextMenu,
+  onTerminalMenu
 }: SessionPaneProps): JSX.Element {
   const splitRef = useRef<HTMLDivElement>(null)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
@@ -1046,6 +1058,7 @@ function SessionPane({
             onOpenUrl={openUrl}
             onRename={onRename}
             onOpenBrowser={() => onUpdate(name, { showBrowser: true })}
+            onContextMenu={(x, y, items) => onTerminalMenu(name, x, y, items)}
           />
         </div>
         {showBrowser ? (

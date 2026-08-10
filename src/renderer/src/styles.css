@@ -412,8 +412,13 @@ body {
   width: 100%;
 }
 
-.ctx-menu button:hover {
+.ctx-menu button:hover:not(:disabled) {
   background: #333a46;
+}
+
+.ctx-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .ctx-check {

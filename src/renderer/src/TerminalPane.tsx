@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import type { MenuItem } from './Dialogs'
 import type { SessionInfo, SshConfig } from '@shared/types'
 
 export interface TerminalHandle {
@@ -23,6 +24,11 @@ interface Props {
   onOpenUrl(url: string): void
   onRename(): void
   onOpenBrowser(): void
+  /**
+   * Raised to the app rather than rendered here: a native browser view paints
+   * above the page, so any menu has to be one the app knows to hide behind.
+   */
+  onContextMenu(x: number, y: number, items: MenuItem[]): void
 }
 
 const THEME = {
@@ -42,7 +48,18 @@ const THEME = {
 }
 
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { session, ssh, active, detachWhenHidden, focusOnShow, hasBrowser, onOpenUrl, onRename, onOpenBrowser },
+  {
+    session,
+    ssh,
+    active,
+    detachWhenHidden,
+    focusOnShow,
+    hasBrowser,
+    onOpenUrl,
+    onRename,
+    onOpenBrowser,
+    onContextMenu
+  },
   ref
 ) {
   const id = session.name
@@ -255,7 +272,31 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
           ⟳
         </button>
       </div>
-      <div className="terminal-host" ref={hostRef} />
+      <div
+        className="terminal-host"
+        ref={hostRef}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const term = termRef.current
+          const selection = term?.getSelection() ?? ''
+          onContextMenu(e.clientX, e.clientY, [
+            {
+              label: selection ? 'Copy' : 'Copy (nothing selected)',
+              disabled: !selection,
+              onClick: () => void window.rippon.clipboard.write(selection)
+            },
+            {
+              label: 'Paste',
+              onClick: () => {
+                void window.rippon.clipboard.read().then((text) => {
+                  if (text) void window.rippon.pty.write(id, text)
+                })
+              }
+            },
+            { label: 'Select all', onClick: () => term?.selectAll() }
+          ])
+        }}
+      />
     </div>
   )
 })

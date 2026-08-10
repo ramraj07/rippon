@@ -238,6 +238,7 @@ export interface MenuItem {
   onClick(): void
   checked?: boolean
   danger?: boolean
+  disabled?: boolean
   separator?: boolean
 }
 
@@ -265,6 +266,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): JSX.Ele
             {item.separator ? <div className="ctx-sep" /> : null}
             <button
               className={item.danger ? 'ctx-danger' : ''}
+              disabled={item.disabled}
               onClick={() => {
                 onClose()
                 item.onClick()

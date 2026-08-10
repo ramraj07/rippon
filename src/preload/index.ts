@@ -60,6 +60,10 @@ const api = {
     onState: (cb: (id: string, state: BrowserState) => void) =>
       on<[string, BrowserState]>('browser:state', cb)
   },
+  clipboard: {
+    write: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write', text),
+    read: (): Promise<string> => ipcRenderer.invoke('clipboard:read')
+  },
   focusPage: (): Promise<void> => ipcRenderer.invoke('window:focus-page'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
   onMenu: (cb: (action: string, payload?: unknown) => void): (() => void) => {

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -346,6 +347,9 @@ function registerIpc(): void {
   ipcMain.handle('window:focus-page', () => mainWindow?.webContents.focus())
 
   browsers.on('state', (id: string, state: BrowserState) => send('browser:state', id, state))
+
+  ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text))
+  ipcMain.handle('clipboard:read', () => clipboard.readText())
 
   ipcMain.handle('shell:open-external', (_e, url: string) => {
     if (/^https?:/i.test(url)) void shell.openExternal(url)
