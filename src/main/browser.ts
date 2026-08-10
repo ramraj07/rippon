@@ -105,8 +105,7 @@ export class BrowserViews extends EventEmitter {
     wc.on('did-navigate', () => {
       // A new origin arrives with whatever the session stored for it.
       this.lastZoom.delete(id)
-      const last = this.lastRequest.get(id)
-      if (last) this.applyZoom(id, last.width, last.zoom)
+      this.applyZoom()
       update()
     })
     wc.on('did-navigate-in-page', update)
@@ -226,12 +225,13 @@ export class BrowserViews extends EventEmitter {
       this.lastBounds.set(id, next)
       // Zoom first: a page that lays out narrow even for one frame can enter a
       // loop it never leaves, so it must never see the smaller size unscaled.
-      this.applyZoom(id, next.width, zoom)
+      this.applyZoom()
       view.setBounds(next)
     }
     if (this.lastVisible.get(id) !== true) {
       this.lastVisible.set(id, true)
       view.setVisible(true)
+      this.applyZoom()
     }
   }
 
@@ -246,9 +246,23 @@ export class BrowserViews extends EventEmitter {
    * their least-tested breakpoints below that; GitHub's PR inbox spins its
    * renderer at 100% CPU indefinitely at ~260px and never recovers.
    */
-  private applyZoom(id: string, width: number, viewZoom: number): void {
-    const fitted = width > 0 ? width / MIN_CSS_VIEWPORT : 1
-    this.setZoom(id, Math.max(MIN_AUTO_ZOOM, Math.min(viewZoom, fitted)))
+  private applyZoom(): void {
+    /*
+     * One value for every pane, taken from the narrowest one on screen. Zoom is
+     * stored per origin on the shared session, so a pane cannot hold its own:
+     * when panes resized a few ms apart each set their own, the first to widen
+     * raised the zoom while the second was still small — handing that one a
+     * viewport narrow enough to wedge it. Deriving from the narrowest means
+     * zoom only ever rises once every pane can take it.
+     */
+    let zoom = Number.POSITIVE_INFINITY
+    for (const [id, req] of this.lastRequest) {
+      if (this.lastVisible.get(id) !== true) continue
+      const fitted = req.width > 0 ? req.width / MIN_CSS_VIEWPORT : 1
+      zoom = Math.min(zoom, Math.max(MIN_AUTO_ZOOM, Math.min(req.zoom, fitted)))
+    }
+    if (!Number.isFinite(zoom)) return
+    for (const id of this.views.keys()) this.setZoom(id, zoom)
   }
 
   /**
