@@ -13,6 +13,8 @@ export interface SshConfig {
 export interface SessionConfig {
   url: string
   splitRatio: number
+  /** Whether the browser pane is open. Off until asked for — see defaultSession. */
+  showBrowser: boolean
 }
 
 export type ViewType = 'tabs-horizontal' | 'tabs-vertical' | 'tiled'
@@ -101,8 +103,12 @@ export function defaultConfig(): RipponConfig {
   }
 }
 
+/**
+ * A session is a terminal until you ask for more. The browser pane costs a
+ * renderer process each, so it is opened per session rather than by default.
+ */
 export function defaultSession(): SessionConfig {
-  return { url: DEFAULT_URL, splitRatio: 0.5 }
+  return { url: DEFAULT_URL, splitRatio: 0.5, showBrowser: false }
 }
 
 /**
@@ -181,7 +187,8 @@ export function normalizeConfig(raw: unknown): RipponConfig {
     out.sessions[name] = {
       url: typeof s.url === 'string' ? s.url : DEFAULT_URL,
       splitRatio:
-        typeof s.splitRatio === 'number' ? Math.min(0.85, Math.max(0.15, s.splitRatio)) : 0.5
+        typeof s.splitRatio === 'number' ? Math.min(0.85, Math.max(0.15, s.splitRatio)) : 0.5,
+      showBrowser: s.showBrowser === true
     }
   }
 

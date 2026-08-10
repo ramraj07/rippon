@@ -169,7 +169,13 @@ export default function App(): JSX.Element {
       const cur = configRef.current
       const existing = cur.sessions[name] ?? defaultSession()
       const next = { ...existing, ...patch }
-      if (next.url === existing.url && next.splitRatio === existing.splitRatio) return
+      if (
+        next.url === existing.url &&
+        next.splitRatio === existing.splitRatio &&
+        next.showBrowser === existing.showBrowser
+      ) {
+        return
+      }
       commit({ ...cur, sessions: { ...cur.sessions, [name]: next } })
     },
     [commit]
@@ -698,13 +704,7 @@ export default function App(): JSX.Element {
                     title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click or right-click to rename`}
                   >
                     <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
-                    <span className="vtab-text">
-                      <span className="vtab-name">{s.name}</span>
-                      <span className="vtab-meta">
-                        {s.windows} window{s.windows === 1 ? '' : 's'}
-                        {s.attached ? ' · attached' : ''}
-                      </span>
-                    </span>
+                    <span className="vtab-name">{s.name}</span>
                     <button
                       className="tab-close"
                       title="Close tab"
@@ -943,6 +943,7 @@ function SessionPane({
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const ratio = dragRatio ?? settings.splitRatio
   const name = session.name
+  const showBrowser = settings.showBrowser
 
   function startDrag(e: ReactPointerEvent<HTMLDivElement>): void {
     const container = splitRef.current
@@ -966,7 +967,15 @@ function SessionPane({
   }
 
   const onUrlChange = useCallback((url: string) => onUpdate(name, { url }), [name, onUpdate])
-  const openUrl = useCallback((url: string) => browsers.get(name)?.navigate(url), [browsers, name])
+
+  // A link clicked in the terminal opens the browser pane if it is closed.
+  const openUrl = useCallback(
+    (url: string) => {
+      if (showBrowser) browsers.get(name)?.navigate(url)
+      else onUpdate(name, { showBrowser: true, url })
+    },
+    [browsers, name, onUpdate, showBrowser]
+  )
 
   return (
     <div
@@ -1002,7 +1011,10 @@ function SessionPane({
       ) : null}
 
       <div className="split-row" ref={splitRef}>
-        <div className="split-left" style={{ width: `calc(${ratio * 100}% - 3px)` }}>
+        <div
+          className="split-left"
+          style={showBrowser ? { width: `calc(${ratio * 100}% - 3px)` } : { flex: 1 }}
+        >
           <TerminalPane
             ref={(h) => {
               terminals.set(name, h)
@@ -1012,21 +1024,28 @@ function SessionPane({
             active={visible}
             focusOnShow={focusOnShow}
             detachWhenHidden={detachHidden}
+            hasBrowser={showBrowser}
             onOpenUrl={openUrl}
             onRename={onRename}
+            onOpenBrowser={() => onUpdate(name, { showBrowser: true })}
           />
         </div>
-        <div className="splitter" onPointerDown={startDrag} />
-        <div className="split-right">
-          <BrowserPane
-            ref={(h) => {
-              browsers.set(name, h)
-            }}
-            url={settings.url}
-            active={visible}
-            onUrlChange={onUrlChange}
-          />
-        </div>
+        {showBrowser ? (
+          <>
+            <div className="splitter" onPointerDown={startDrag} />
+            <div className="split-right">
+              <BrowserPane
+                ref={(h) => {
+                  browsers.set(name, h)
+                }}
+                url={settings.url}
+                active={visible}
+                onUrlChange={onUrlChange}
+                onClose={() => onUpdate(name, { showBrowser: false })}
+              />
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   )

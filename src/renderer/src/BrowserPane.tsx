@@ -11,6 +11,7 @@ interface Props {
   url: string
   active: boolean
   onUrlChange(url: string): void
+  onClose(): void
 }
 
 /** Turn whatever the user typed into something loadable. */
@@ -24,7 +25,7 @@ export function toUrl(input: string): string {
 }
 
 const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
-  { url, active, onUrlChange },
+  { url, active, onUrlChange, onClose },
   ref
 ) {
   const viewRef = useRef<WebviewElement | null>(null)
@@ -184,6 +185,9 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
           onClick={() => void window.rippon.openExternal(currentUrlRef.current)}
         >
           ↗
+        </button>
+        <button className="icon-btn" title="Close browser pane" onClick={onClose}>
+          ×
         </button>
       </div>
       <div className="webview-host" ref={hostRef}>

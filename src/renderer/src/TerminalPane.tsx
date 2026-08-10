@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
 import type { SessionInfo, SshConfig } from '@shared/types'
 
 export interface TerminalHandle {
@@ -17,9 +18,11 @@ interface Props {
   detachWhenHidden: boolean
   /** Steal keyboard focus when shown. Off in tiled views, where several panes appear at once. */
   focusOnShow: boolean
+  hasBrowser: boolean
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
   onRename(): void
+  onOpenBrowser(): void
 }
 
 const THEME = {
@@ -39,7 +42,7 @@ const THEME = {
 }
 
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { session, ssh, active, detachWhenHidden, focusOnShow, onOpenUrl, onRename },
+  { session, ssh, active, detachWhenHidden, focusOnShow, hasBrowser, onOpenUrl, onRename, onOpenBrowser },
   ref
 ) {
   const id = session.name
@@ -90,7 +93,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       fontSize: 13,
       lineHeight: 1.2,
       cursorBlink: true,
-      scrollback: 50000,
+      // Every open session holds its own buffer, so this is paid per pane.
+      scrollback: 10000,
       allowProposedApi: true,
       theme: THEME,
       // OSC 8 hyperlinks (what most agents emit for PR links).
@@ -101,6 +105,21 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     // Plain-text URLs printed to stdout.
     term.loadAddon(new WebLinksAddon((_event, uri) => openUrlRef.current(uri)))
     term.open(host)
+
+    // The default DOM renderer costs a lot of CPU per pane once an agent starts
+    // producing output, and we run many panes at once. Fall back quietly: if the
+    // GPU context is lost, xterm reverts to the DOM renderer on its own.
+    let webgl: WebglAddon | null = null
+    try {
+      webgl = new WebglAddon()
+      webgl.onContextLoss(() => {
+        webgl?.dispose()
+        webgl = null
+      })
+      term.loadAddon(webgl)
+    } catch {
+      webgl = null
+    }
 
     termRef.current = term
     fitRef.current = fit
@@ -140,6 +159,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       offData()
       offExit()
       onDataDisposable.dispose()
+      webgl?.dispose()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -202,11 +222,12 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
         <span className="pane-title" onDoubleClick={onRename} title="Double-click to rename">
           {session.name}
         </span>
-        <span className="pane-sub">
-          {session.windows} window{session.windows === 1 ? '' : 's'}
-          {session.attached ? ' · attached' : ''}
-        </span>
         <span className="spacer" />
+        {!hasBrowser ? (
+          <button className="icon-btn" title="Open browser pane" onClick={onOpenBrowser}>
+            ⊞ browser
+          </button>
+        ) : null}
         <button
           className="icon-btn"
           title="Reattach (⌘⇧R)"
