@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
 import * as pty from 'node-pty'
+import { attachArgs } from './tmux'
 import type { SshConfig } from '../shared/types'
 
 /**
@@ -8,19 +9,6 @@ import type { SshConfig } from '../shared/types'
  * so ~/.ssh/config aliases, ProxyJump, agent forwarding and interactive MFA
  * prompts all behave exactly as they do in a normal terminal.
  */
-
-export interface StartOptions {
-  ssh: SshConfig
-  cols: number
-  rows: number
-}
-
-export function buildSshArgs(ssh: SshConfig): string[] {
-  const args = ['-tt', ...(ssh.args ?? []), ssh.host]
-  if (ssh.command && ssh.command.trim()) args.push(ssh.command)
-  return args
-}
-
 export class PtyManager extends EventEmitter {
   private sessions = new Map<string, pty.IPty>()
 
@@ -28,13 +16,13 @@ export class PtyManager extends EventEmitter {
     return this.sessions.has(id)
   }
 
-  start(id: string, opts: StartOptions): void {
+  attach(id: string, ssh: SshConfig, session: string, cols: number, rows: number): void {
     this.kill(id)
 
-    const proc = pty.spawn('ssh', buildSshArgs(opts.ssh), {
+    const proc = pty.spawn('ssh', attachArgs(ssh, session), {
       name: 'xterm-256color',
-      cols: Math.max(opts.cols, 2),
-      rows: Math.max(opts.rows, 2),
+      cols: Math.max(cols, 2),
+      rows: Math.max(rows, 2),
       cwd: os.homedir(),
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<
         string,
@@ -44,9 +32,9 @@ export class PtyManager extends EventEmitter {
 
     this.sessions.set(id, proc)
     proc.onData((data) => this.emit('data', id, data))
-    proc.onExit(({ exitCode, signal }) => {
+    proc.onExit(({ exitCode }) => {
       this.sessions.delete(id)
-      this.emit('exit', id, exitCode, signal)
+      this.emit('exit', id, exitCode)
     })
   }
 
@@ -64,6 +52,7 @@ export class PtyManager extends EventEmitter {
     }
   }
 
+  /** Kills the local ssh client only — the tmux session keeps running remotely. */
   kill(id: string): void {
     const proc = this.sessions.get(id)
     if (!proc) return

@@ -1,87 +1,102 @@
-export const CONFIG_VERSION = 1 as const
+export const CONFIG_VERSION = 2 as const
 
-/** One tab = one SSH session (left) + one browser view (right). */
-export interface TabConfig {
-  id: string
-  title: string
-  ssh: SshConfig
-  browser: BrowserConfig
-  /** Fraction of the tab width given to the terminal pane, 0.15–0.85. */
-  splitRatio: number
-}
-
+/** One SSH target for the whole app. Tabs are tmux sessions living on it. */
 export interface SshConfig {
-  /** ssh_config alias or user@host. Passed straight to the ssh binary. */
   host: string
-  /** Remote command to run, e.g. "tmux new -A -s agent". Empty = login shell. */
-  command?: string
-  /** Extra flags for ssh, e.g. ["-p", "2222"]. */
-  args?: string[]
-  /** Connect as soon as the app opens instead of on first tab activation. */
-  autoConnect?: boolean
+  /** Extra flags for the ssh binary, e.g. ["-i", "/path/key.pem"]. */
+  args: string[]
+  /** Optional command tmux runs when a new session is created. */
+  newSessionCommand?: string
 }
 
-export interface BrowserConfig {
+/** Local decoration for a tmux session, keyed by session name. */
+export interface SessionConfig {
   url: string
+  splitRatio: number
 }
 
 export interface RipponConfig {
   version: typeof CONFIG_VERSION
-  activeTabId?: string
-  tabs: TabConfig[]
+  ssh: SshConfig
+  activeSession?: string
+  /** Sessions the user closed the tab for but chose to keep running. */
+  hidden: string[]
+  sessions: Record<string, SessionConfig>
 }
 
-export type PtyStatus = 'idle' | 'running' | 'exited'
+/** A tmux session as reported by the remote host. */
+export interface SessionInfo {
+  name: string
+  created: number
+  attached: boolean
+  windows: number
+}
+
+export const DEFAULT_URL = 'https://github.com/pulls'
 
 export function defaultConfig(): RipponConfig {
-  return { version: CONFIG_VERSION, tabs: [] }
-}
-
-export function newTab(id: string, partial: Partial<TabConfig> = {}): TabConfig {
   return {
-    id,
-    title: partial.title ?? 'New tab',
-    ssh: { host: '', command: '', ...(partial.ssh ?? {}) },
-    browser: { url: 'https://github.com/pulls', ...(partial.browser ?? {}) },
-    splitRatio: partial.splitRatio ?? 0.5
+    version: CONFIG_VERSION,
+    ssh: { host: '', args: [] },
+    hidden: [],
+    sessions: {}
   }
 }
 
-/** Coerce anything read off disk into a valid config, dropping junk. */
+export function defaultSession(): SessionConfig {
+  return { url: DEFAULT_URL, splitRatio: 0.5 }
+}
+
+/**
+ * tmux forbids "." and ":" in session names, and anything needing shell quoting
+ * would have to survive a trip through ssh, so keep it to a safe subset.
+ */
+export const SESSION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+export function sessionNameError(name: string): string | null {
+  if (!name.trim()) return 'Name is required.'
+  if (!SESSION_NAME_RE.test(name)) {
+    return 'Use letters, numbers, dashes and underscores only (max 64).'
+  }
+  return null
+}
+
+/** Coerce anything read off disk — including a v1 file — into a valid config. */
 export function normalizeConfig(raw: unknown): RipponConfig {
-  const cfg = (raw ?? {}) as Partial<RipponConfig>
-  const tabs = Array.isArray(cfg.tabs) ? cfg.tabs : []
-  const seen = new Set<string>()
-  const normTabs: TabConfig[] = []
+  const cfg = (raw ?? {}) as Record<string, unknown>
+  const out = defaultConfig()
 
-  for (const [i, t] of tabs.entries()) {
-    if (!t || typeof t !== 'object') continue
-    let id = typeof t.id === 'string' && t.id ? t.id : `tab-${i}`
-    while (seen.has(id)) id = `${id}-${i}`
-    seen.add(id)
+  // v1 stored ssh settings per tab; carry the first tab's over and drop the rest.
+  const legacyTabs = Array.isArray(cfg.tabs) ? (cfg.tabs as Array<Record<string, unknown>>) : null
+  const rawSsh = (cfg.ssh ?? legacyTabs?.[0]?.ssh ?? {}) as Record<string, unknown>
 
-    const ssh = (t.ssh ?? {}) as Partial<SshConfig>
-    const browser = (t.browser ?? {}) as Partial<BrowserConfig>
-    const ratio = typeof t.splitRatio === 'number' ? t.splitRatio : 0.5
-
-    normTabs.push({
-      id,
-      title: typeof t.title === 'string' && t.title ? t.title : ssh.host || 'Tab',
-      ssh: {
-        host: typeof ssh.host === 'string' ? ssh.host : '',
-        command: typeof ssh.command === 'string' ? ssh.command : '',
-        args: Array.isArray(ssh.args) ? ssh.args.filter((a) => typeof a === 'string') : [],
-        autoConnect: ssh.autoConnect === true
-      },
-      browser: { url: typeof browser.url === 'string' ? browser.url : 'about:blank' },
-      splitRatio: Math.min(0.85, Math.max(0.15, ratio))
-    })
+  out.ssh = {
+    host: typeof rawSsh.host === 'string' ? rawSsh.host : '',
+    args: Array.isArray(rawSsh.args) ? rawSsh.args.filter((a): a is string => typeof a === 'string') : [],
+    newSessionCommand:
+      typeof rawSsh.newSessionCommand === 'string' ? rawSsh.newSessionCommand : undefined
+  }
+  // v1 kept the remote command on the tab; it is the closest thing to a session command.
+  if (!out.ssh.newSessionCommand && typeof rawSsh.command === 'string' && rawSsh.command) {
+    out.ssh.newSessionCommand = rawSsh.command
   }
 
-  const activeTabId =
-    typeof cfg.activeTabId === 'string' && normTabs.some((t) => t.id === cfg.activeTabId)
-      ? cfg.activeTabId
-      : normTabs[0]?.id
+  const sessions = (cfg.sessions ?? {}) as Record<string, unknown>
+  for (const [name, value] of Object.entries(sessions)) {
+    if (!SESSION_NAME_RE.test(name) || !value || typeof value !== 'object') continue
+    const s = value as Partial<SessionConfig>
+    out.sessions[name] = {
+      url: typeof s.url === 'string' ? s.url : DEFAULT_URL,
+      splitRatio:
+        typeof s.splitRatio === 'number' ? Math.min(0.85, Math.max(0.15, s.splitRatio)) : 0.5
+    }
+  }
 
-  return { version: CONFIG_VERSION, activeTabId, tabs: normTabs }
+  out.hidden = Array.isArray(cfg.hidden)
+    ? [...new Set(cfg.hidden.filter((h): h is string => typeof h === 'string'))]
+    : []
+
+  if (typeof cfg.activeSession === 'string') out.activeSession = cfg.activeSession
+
+  return out
 }

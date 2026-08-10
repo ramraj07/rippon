@@ -93,7 +93,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.tab-gear,
 .tab-close,
 .tab-add {
   border: none;
@@ -106,7 +105,6 @@ body {
   line-height: 1;
 }
 
-.tab-gear:hover,
 .tab-close:hover,
 .tab-add:hover {
   opacity: 1;
@@ -119,22 +117,73 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.config-path {
+.add-wrap {
+  position: relative;
   -webkit-app-region: no-drag;
+}
+
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.add-menu {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  z-index: 21;
+  min-width: 190px;
+  padding: 4px;
+  background: #23272f;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+
+.add-menu button {
+  text-align: left;
   border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.add-menu button:hover {
+  background: #333a46;
+}
+
+.menu-label {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.host-btn {
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   background: transparent;
   color: var(--text-dim);
   font-size: 11px;
-  max-width: 280px;
+  padding: 4px 8px;
+  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
-  direction: rtl;
 }
 
-.config-path:hover {
+.host-btn:hover {
   color: var(--text);
+  border-color: var(--accent);
 }
 
 .error-bar {
@@ -147,12 +196,20 @@ body {
   font-size: 12px;
 }
 
+.error-text-body {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
 .error-bar button {
-  margin-left: auto;
   background: none;
   border: none;
   color: inherit;
   cursor: pointer;
+  text-decoration: underline;
 }
 
 /* ---------- panes ---------- */
@@ -236,15 +293,11 @@ body {
   flex: 0 0 auto;
 }
 
-.dot-running {
+.dot-attached {
   background: var(--ok);
 }
 
-.dot-connecting {
-  background: #e0af68;
-}
-
-.dot-exited {
+.dot-detached {
   background: var(--danger);
 }
 
@@ -364,10 +417,44 @@ body {
   gap: 12px;
 }
 
+.modal-narrow {
+  width: 380px;
+}
+
 .modal h2 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
+}
+
+.modal-note {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.path-btn {
+  text-align: left;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-btn:hover {
+  border-color: var(--accent);
+}
+
+.error-text {
+  color: var(--danger);
 }
 
 .modal label {

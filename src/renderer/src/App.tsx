@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type JSX,
@@ -8,21 +9,35 @@ import {
 } from 'react'
 import TerminalPane, { type TerminalHandle } from './TerminalPane'
 import BrowserPane, { type BrowserHandle } from './BrowserPane'
-import TabSettings from './TabSettings'
-import { defaultConfig, newTab, type RipponConfig, type TabConfig } from '@shared/types'
+import SshSettings from './SshSettings'
+import { CloseSessionDialog, NameDialog } from './Dialogs'
+import {
+  defaultConfig,
+  defaultSession,
+  type RipponConfig,
+  type SessionConfig,
+  type SessionInfo,
+  type SshConfig
+} from '@shared/types'
 
 const SAVE_DEBOUNCE_MS = 400
+const POLL_MS = 5000
 
-function makeId(): string {
-  return `tab-${Math.random().toString(36).slice(2, 9)}`
-}
+type Dialog =
+  | { kind: 'settings' }
+  | { kind: 'new' }
+  | { kind: 'rename'; name: string }
+  | { kind: 'close'; name: string }
+  | null
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<RipponConfig>(defaultConfig)
   const [configPath, setConfigPath] = useState('')
+  const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [ready, setReady] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const [addMenu, setAddMenu] = useState(false)
 
   const terminals = useRef(new Map<string, TerminalHandle | null>())
   const browsers = useRef(new Map<string, BrowserHandle | null>())
@@ -31,204 +46,387 @@ export default function App(): JSX.Element {
   const configRef = useRef(config)
   configRef.current = config
 
-  const activeId = config.activeTabId ?? config.tabs[0]?.id
+  const visible = useMemo(
+    () => sessions.filter((s) => !config.hidden.includes(s.name)),
+    [sessions, config.hidden]
+  )
+  const activeName =
+    visible.find((s) => s.name === config.activeSession)?.name ?? visible[0]?.name ?? null
+  const hiddenExisting = useMemo(
+    () => sessions.filter((s) => config.hidden.includes(s.name)),
+    [sessions, config.hidden]
+  )
 
   /** Single write path: update local state now, persist to disk debounced. */
   const commit = useCallback((next: RipponConfig) => {
     configRef.current = next
     setConfig(next)
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      void window.rippon.config.save(next)
-    }, SAVE_DEBOUNCE_MS)
+    saveTimer.current = setTimeout(() => void window.rippon.config.save(next), SAVE_DEBOUNCE_MS)
   }, [])
 
-  const updateTab = useCallback(
-    (id: string, patch: (t: TabConfig) => TabConfig) => {
-      const cur = configRef.current
-      commit({ ...cur, tabs: cur.tabs.map((t) => (t.id === id ? patch(t) : t)) })
-    },
-    [commit]
-  )
+  const refresh = useCallback(async () => {
+    const ssh = configRef.current.ssh
+    if (!ssh.host) {
+      setSessions([])
+      setListError(null)
+      return
+    }
+    const res = await window.rippon.tmux.list(ssh)
+    if (!res.ok) {
+      setListError(res.error)
+      return
+    }
+    setListError(null)
+    setSessions(res.value)
 
-  const selectTab = useCallback(
-    (id: string) => {
-      if (configRef.current.activeTabId === id) return
-      commit({ ...configRef.current, activeTabId: id })
-    },
-    [commit]
-  )
-
-  const addTab = useCallback(() => {
+    // Drop hidden entries whose session no longer exists remotely.
+    const live = new Set(res.value.map((s) => s.name))
     const cur = configRef.current
-    const tab = newTab(makeId(), { title: `Tab ${cur.tabs.length + 1}` })
-    commit({ ...cur, tabs: [...cur.tabs, tab], activeTabId: tab.id })
-    setEditingId(tab.id)
+    const prunedHidden = cur.hidden.filter((h) => live.has(h))
+    if (prunedHidden.length !== cur.hidden.length) commit({ ...cur, hidden: prunedHidden })
   }, [commit])
 
-  const closeTab = useCallback(
-    (id: string) => {
-      const cur = configRef.current
-      const idx = cur.tabs.findIndex((t) => t.id === id)
-      if (idx === -1) return
-      const tabs = cur.tabs.filter((t) => t.id !== id)
-      const nextActive =
-        cur.activeTabId === id ? tabs[Math.min(idx, tabs.length - 1)]?.id : cur.activeTabId
-      void window.rippon.pty.kill(id)
-      terminals.current.delete(id)
-      browsers.current.delete(id)
-      commit({ ...cur, tabs, activeTabId: nextActive })
+  const selectSession = useCallback(
+    (name: string) => {
+      if (configRef.current.activeSession === name) return
+      commit({ ...configRef.current, activeSession: name })
     },
     [commit]
   )
 
-  const cycleTab = useCallback(
-    (delta: number) => {
+  const updateSession = useCallback(
+    (name: string, patch: Partial<SessionConfig>) => {
       const cur = configRef.current
-      if (cur.tabs.length < 2) return
-      const idx = cur.tabs.findIndex((t) => t.id === cur.activeTabId)
-      const next = cur.tabs[(idx + delta + cur.tabs.length) % cur.tabs.length]
-      if (next) selectTab(next.id)
+      const existing = cur.sessions[name] ?? defaultSession()
+      const next = { ...existing, ...patch }
+      if (next.url === existing.url && next.splitRatio === existing.splitRatio) return
+      commit({ ...cur, sessions: { ...cur.sessions, [name]: next } })
     },
-    [selectTab]
+    [commit]
   )
 
-  // Initial load + external config changes (another machine syncing the file in).
+  /** Pick the tab to show after `name` leaves the strip. */
+  const neighbourOf = useCallback(
+    (name: string): string | undefined => {
+      const idx = visible.findIndex((s) => s.name === name)
+      const rest = visible.filter((s) => s.name !== name)
+      return rest[Math.min(Math.max(idx, 0), rest.length - 1)]?.name
+    },
+    [visible]
+  )
+
+  const createSession = useCallback(
+    async (name: string) => {
+      setDialog(null)
+      const res = await window.rippon.tmux.create(configRef.current.ssh, name)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      const cur = configRef.current
+      commit({
+        ...cur,
+        hidden: cur.hidden.filter((h) => h !== name),
+        activeSession: name,
+        sessions: { ...cur.sessions, [name]: cur.sessions[name] ?? defaultSession() }
+      })
+      await refresh()
+    },
+    [commit, refresh]
+  )
+
+  const hideSession = useCallback(
+    (name: string) => {
+      setDialog(null)
+      const cur = configRef.current
+      commit({
+        ...cur,
+        hidden: [...new Set([...cur.hidden, name])],
+        activeSession: neighbourOf(name)
+      })
+    },
+    [commit, neighbourOf]
+  )
+
+  const killSession = useCallback(
+    async (name: string) => {
+      setDialog(null)
+      const next = neighbourOf(name)
+      const res = await window.rippon.tmux.kill(configRef.current.ssh, name)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      const cur = configRef.current
+      const { [name]: _removed, ...rest } = cur.sessions
+      commit({
+        ...cur,
+        sessions: rest,
+        hidden: cur.hidden.filter((h) => h !== name),
+        activeSession: next
+      })
+      await refresh()
+    },
+    [commit, neighbourOf, refresh]
+  )
+
+  const renameSession = useCallback(
+    async (from: string, to: string) => {
+      setDialog(null)
+      if (from === to) return
+      const res = await window.rippon.tmux.rename(configRef.current.ssh, from, to)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      const cur = configRef.current
+      const { [from]: moved, ...rest } = cur.sessions
+      commit({
+        ...cur,
+        sessions: { ...rest, [to]: moved ?? defaultSession() },
+        hidden: cur.hidden.map((h) => (h === from ? to : h)),
+        activeSession: cur.activeSession === from ? to : cur.activeSession
+      })
+      await refresh()
+    },
+    [commit, refresh]
+  )
+
+  const saveSsh = useCallback(
+    (ssh: SshConfig) => {
+      setDialog(null)
+      commit({ ...configRef.current, ssh })
+      void refresh()
+    },
+    [commit, refresh]
+  )
+
+  // Initial load, plus external config changes (another machine syncing the file in).
   useEffect(() => {
     void window.rippon.config.get().then(({ config: cfg, path }) => {
-      setConfig(cfg.tabs.length ? cfg : { ...cfg, tabs: [newTab(makeId(), { title: 'Tab 1' })] })
+      configRef.current = cfg
+      setConfig(cfg)
       setConfigPath(path)
       setReady(true)
+      if (!cfg.ssh.host) setDialog({ kind: 'settings' })
+      void refresh()
     })
 
     const offConfig = window.rippon.config.onChanged((cfg, path) => {
       configRef.current = cfg
       setConfig(cfg)
       setConfigPath(path)
+      void refresh()
     })
-    const offError = window.rippon.onError(setError)
+    const offError = window.rippon.onError(setListError)
     return () => {
       offConfig()
       offError()
     }
-  }, [])
+  }, [refresh])
+
+  // Keep the tab strip in step with the remote session list.
+  useEffect(() => {
+    const timer = setInterval(() => void refresh(), POLL_MS)
+    const onFocus = (): void => void refresh()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [refresh])
 
   // Menu commands.
   useEffect(() => {
     return window.rippon.onMenu((action, payload) => {
-      const id = configRef.current.activeTabId
+      const name = activeName
       switch (action) {
-        case 'menu:new-tab':
-          return addTab()
+        case 'menu:new-session':
+          return setDialog({ kind: 'new' })
+        case 'menu:settings':
+          return setDialog({ kind: 'settings' })
+        case 'menu:refresh':
+          return void refresh()
         case 'menu:close-tab':
-          return id ? closeTab(id) : undefined
-        case 'menu:cycle-tab':
-          return cycleTab(typeof payload === 'number' ? payload : 1)
+          return name ? setDialog({ kind: 'close', name }) : undefined
+        case 'menu:cycle-tab': {
+          if (visible.length < 2 || !name) return
+          const idx = visible.findIndex((s) => s.name === name)
+          const delta = typeof payload === 'number' ? payload : 1
+          return selectSession(visible[(idx + delta + visible.length) % visible.length].name)
+        }
         case 'menu:select-tab-index': {
-          const t = configRef.current.tabs[typeof payload === 'number' ? payload : 0]
-          return t ? selectTab(t.id) : undefined
+          const s = visible[typeof payload === 'number' ? payload : 0]
+          return s ? selectSession(s.name) : undefined
         }
         case 'menu:focus-address':
-          return id ? browsers.current.get(id)?.focusAddress() : undefined
+          return name ? browsers.current.get(name)?.focusAddress() : undefined
         case 'menu:focus-terminal':
-          return id ? terminals.current.get(id)?.focus() : undefined
+          return name ? terminals.current.get(name)?.focus() : undefined
         case 'menu:reload-browser':
-          return id ? browsers.current.get(id)?.reload() : undefined
+          return name ? browsers.current.get(name)?.reload() : undefined
         case 'menu:reconnect-ssh':
-          return id ? terminals.current.get(id)?.reconnect() : undefined
+          return name ? terminals.current.get(name)?.reattach() : undefined
       }
     })
-  }, [addTab, closeTab, cycleTab, selectTab])
-
-  const editingTab = config.tabs.find((t) => t.id === editingId) ?? null
+  }, [activeName, refresh, selectSession, visible])
 
   return (
     <div className="app">
       <header className="titlebar">
         <div className="tabstrip">
-          {config.tabs.map((tab) => (
+          {visible.map((s) => (
             <div
-              key={tab.id}
-              className={`tab ${tab.id === activeId ? 'tab-active' : ''}`}
-              onClick={() => selectTab(tab.id)}
-              onDoubleClick={() => setEditingId(tab.id)}
-              title={tab.ssh.host ? `${tab.ssh.host}${tab.ssh.command ? ` — ${tab.ssh.command}` : ''}` : 'No host set'}
+              key={s.name}
+              className={`tab ${s.name === activeName ? 'tab-active' : ''}`}
+              onClick={() => selectSession(s.name)}
+              onDoubleClick={() => setDialog({ kind: 'rename', name: s.name })}
+              title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}`}
             >
-              <span className="tab-title">{tab.title}</span>
-              <button
-                className="tab-gear"
-                title="Tab settings"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setEditingId(tab.id)
-                }}
-              >
-                ⚙
-              </button>
+              <span className="tab-title">{s.name}</span>
               <button
                 className="tab-close"
                 title="Close tab"
                 onClick={(e) => {
                   e.stopPropagation()
-                  closeTab(tab.id)
+                  setDialog({ kind: 'close', name: s.name })
                 }}
               >
                 ×
               </button>
             </div>
           ))}
-          <button className="tab-add" title="New tab (⌘T)" onClick={addTab}>
-            +
-          </button>
+
+          <div className="add-wrap">
+            <button
+              className="tab-add"
+              title="New session (⌘T)"
+              onClick={() => (hiddenExisting.length ? setAddMenu((v) => !v) : setDialog({ kind: 'new' }))}
+            >
+              +
+            </button>
+            {addMenu ? (
+              <>
+                <div className="menu-scrim" onClick={() => setAddMenu(false)} />
+                <div className="add-menu">
+                  <button
+                    onClick={() => {
+                      setAddMenu(false)
+                      setDialog({ kind: 'new' })
+                    }}
+                  >
+                    New session…
+                  </button>
+                  <div className="menu-label">Running, not shown</div>
+                  {hiddenExisting.map((s) => (
+                    <button
+                      key={s.name}
+                      onClick={() => {
+                        setAddMenu(false)
+                        const cur = configRef.current
+                        commit({
+                          ...cur,
+                          hidden: cur.hidden.filter((h) => h !== s.name),
+                          activeSession: s.name
+                        })
+                      }}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
+
         <button
-          className="config-path"
-          title={`Config: ${configPath}\nClick to choose a different file`}
-          onClick={() => void window.rippon.config.choosePath()}
+          className="host-btn"
+          title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
+          onClick={() => setDialog({ kind: 'settings' })}
         >
-          {configPath.replace(/^\/Users\/[^/]+/, '~')}
+          {config.ssh.host || 'set up SSH…'} ⚙
         </button>
       </header>
 
-      {error ? (
+      {listError ? (
         <div className="error-bar">
-          {error}
-          <button onClick={() => setError(null)}>×</button>
+          <span className="error-text-body">{listError}</span>
+          <button onClick={() => void refresh()}>retry</button>
+          <button onClick={() => setListError(null)}>×</button>
         </div>
       ) : null}
 
       <main className="tabs-body">
-        {!ready ? <div className="empty">Loading config…</div> : null}
-        {ready && config.tabs.length === 0 ? (
+        {ready && visible.length === 0 ? (
           <div className="empty">
-            No tabs yet. <button onClick={addTab}>Create one</button>
+            {!config.ssh.host ? (
+              <>
+                No host configured.
+                <button onClick={() => setDialog({ kind: 'settings' })}>Set up SSH</button>
+              </>
+            ) : (
+              <>
+                No tmux sessions on {config.ssh.host}.
+                <button onClick={() => setDialog({ kind: 'new' })}>Create one</button>
+              </>
+            )}
           </div>
         ) : null}
 
-        {config.tabs.map((tab) => (
+        {visible.map((s) => (
           <TabPanel
-            key={tab.id}
-            tab={tab}
-            active={tab.id === activeId}
+            key={s.name}
+            session={s}
+            ssh={config.ssh}
+            active={s.name === activeName}
+            settings={config.sessions[s.name] ?? defaultSession()}
             terminals={terminals.current}
             browsers={browsers.current}
-            updateTab={updateTab}
+            onUpdate={updateSession}
+            onRename={() => setDialog({ kind: 'rename', name: s.name })}
           />
         ))}
       </main>
 
-      {editingTab ? (
-        <TabSettings
-          tab={editingTab}
-          onClose={() => setEditingId(null)}
-          onDelete={() => {
-            closeTab(editingTab.id)
-            setEditingId(null)
-          }}
-          onSave={(next) => {
-            updateTab(next.id, () => next)
-            setEditingId(null)
-          }}
+      {dialog?.kind === 'settings' ? (
+        <SshSettings
+          ssh={config.ssh}
+          configPath={configPath}
+          onSave={saveSsh}
+          onClose={() => setDialog(null)}
+          onChoosePath={() => void window.rippon.config.choosePath()}
+        />
+      ) : null}
+
+      {dialog?.kind === 'new' ? (
+        <NameDialog
+          title="New tmux session"
+          confirmLabel="Create"
+          taken={sessions.map((s) => s.name)}
+          onSubmit={(name) => void createSession(name)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'rename' ? (
+        <NameDialog
+          title="Rename session"
+          confirmLabel="Rename"
+          initial={dialog.name}
+          taken={sessions.map((s) => s.name)}
+          onSubmit={(name) => void renameSession(dialog.name, name)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'close' ? (
+        <CloseSessionDialog
+          name={dialog.name}
+          onHide={() => hideSession(dialog.name)}
+          onKill={() => void killSession(dialog.name)}
+          onClose={() => setDialog(null)}
         />
       ) : null}
     </div>
@@ -236,17 +434,30 @@ export default function App(): JSX.Element {
 }
 
 interface TabPanelProps {
-  tab: TabConfig
+  session: SessionInfo
+  ssh: SshConfig
   active: boolean
+  settings: SessionConfig
   terminals: Map<string, TerminalHandle | null>
   browsers: Map<string, BrowserHandle | null>
-  updateTab(id: string, patch: (t: TabConfig) => TabConfig): void
+  onUpdate(name: string, patch: Partial<SessionConfig>): void
+  onRename(): void
 }
 
-function TabPanel({ tab, active, terminals, browsers, updateTab }: TabPanelProps): JSX.Element {
+function TabPanel({
+  session,
+  ssh,
+  active,
+  settings,
+  terminals,
+  browsers,
+  onUpdate,
+  onRename
+}: TabPanelProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
-  const ratio = dragRatio ?? tab.splitRatio
+  const ratio = dragRatio ?? settings.splitRatio
+  const name = session.name
 
   function startDrag(e: ReactPointerEvent<HTMLDivElement>): void {
     const container = containerRef.current
@@ -255,14 +466,13 @@ function TabPanel({ tab, active, terminals, browsers, updateTab }: TabPanelProps
 
     const move = (ev: PointerEvent): void => {
       const rect = container.getBoundingClientRect()
-      const next = Math.min(0.85, Math.max(0.15, (ev.clientX - rect.left) / rect.width))
-      setDragRatio(next)
+      setDragRatio(Math.min(0.85, Math.max(0.15, (ev.clientX - rect.left) / rect.width)))
     }
     const up = (): void => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       setDragRatio((final) => {
-        if (final !== null) updateTab(tab.id, (t) => ({ ...t, splitRatio: final }))
+        if (final !== null) onUpdate(name, { splitRatio: final })
         return null
       })
     }
@@ -270,44 +480,30 @@ function TabPanel({ tab, active, terminals, browsers, updateTab }: TabPanelProps
     window.addEventListener('pointerup', up)
   }
 
-  const onUrlChange = useCallback(
-    (url: string) => {
-      updateTab(tab.id, (t) => (t.browser.url === url ? t : { ...t, browser: { url } }))
-    },
-    [tab.id, updateTab]
-  )
-
-  const openUrl = useCallback(
-    (url: string) => {
-      browsers.get(tab.id)?.navigate(url)
-    },
-    [browsers, tab.id]
-  )
+  const onUrlChange = useCallback((url: string) => onUpdate(name, { url }), [name, onUpdate])
+  const openUrl = useCallback((url: string) => browsers.get(name)?.navigate(url), [browsers, name])
 
   return (
-    <div
-      ref={containerRef}
-      className="tab-panel"
-      style={{ display: active ? 'flex' : 'none' }}
-    >
+    <div ref={containerRef} className="tab-panel" style={{ display: active ? 'flex' : 'none' }}>
       <div className="split-left" style={{ width: `calc(${ratio * 100}% - 3px)` }}>
         <TerminalPane
           ref={(h) => {
-            terminals.set(tab.id, h)
+            terminals.set(name, h)
           }}
-          tabId={tab.id}
-          ssh={tab.ssh}
+          session={session}
+          ssh={ssh}
           active={active}
           onOpenUrl={openUrl}
+          onRename={onRename}
         />
       </div>
       <div className="splitter" onPointerDown={startDrag} />
       <div className="split-right">
         <BrowserPane
           ref={(h) => {
-            browsers.set(tab.id, h)
+            browsers.set(name, h)
           }}
-          url={tab.browser.url}
+          url={settings.url}
           active={active}
           onUrlChange={onUrlChange}
         />

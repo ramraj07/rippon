@@ -1,12 +1,18 @@
 # Rippon
 
-Tabbed workspace for driving remote coding agents. Every tab is a **split pane**:
+Tabbed workspace for driving remote coding agents.
 
-- **Left** — an SSH session to a machine where an agent is running (real `ssh` in a PTY, rendered with xterm.js).
-- **Right** — a browser view with an address bar, for the PRs the agent opens.
+**One SSH host for the whole app. Tabs are the tmux sessions running on it.** The tab strip is a
+live view of `tmux list-sessions` — a session an agent spawns on the box shows up as a tab within
+seconds, and a session killed elsewhere takes its tab with it.
 
-Click any link the agent prints in the terminal and it loads in that tab's browser pane
-instead of your system browser. Plain URLs and OSC 8 hyperlinks both work.
+Each tab is a split pane:
+
+- **Left** — an attached tmux session (real `ssh` in a PTY, rendered with xterm.js).
+- **Right** — a browser view with an address bar, for the PRs that session's agent opens.
+
+Click any link the agent prints and it loads in that tab's browser pane instead of your system
+browser. Plain URLs and OSC 8 hyperlinks both work.
 
 ## Running it
 
@@ -16,87 +22,98 @@ npm run dev     # dev, with HMR on the renderer
 npm run build && npm start   # production bundle
 ```
 
-## Tabs and config
+First launch opens SSH settings. Fill in the host and any flags, and the tab strip populates.
 
-The whole workspace — tabs, hosts, remote commands, browser URLs, split positions — lives in a
-single JSON file:
+## Tabs = tmux sessions
 
-```
-~/.rippon/config.json      # default
-```
+| Action | What happens remotely |
+|---|---|
+| **+ → New session…** | `tmux new-session -d -s <name>` |
+| **Double-click a tab** | `tmux rename-session` |
+| **× on a tab** | asks first — see below |
+| Opening a tab | `ssh -tt host tmux -u new-session -A -s <name>` |
+| Every 5s, and on window focus | `tmux list-sessions` |
 
-Point it somewhere synced (`⌘⇧O`, or click the path in the top-right) to carry your tabs
-across machines:
+Closing a tab asks whether to kill the session:
 
-```
-~/Library/CloudStorage/GoogleDrive-you@corp.com/My Drive/rippon/config.json
-```
+- **Close tab only** — detaches and hides the tab. The session and everything running in it keep
+  going; the tab is one click away again under **+**.
+- **Kill session** — `tmux kill-session`. The session and its contents are gone.
 
-The file is watched by polling, so when Drive syncs a newer copy in, the app picks it up live.
-Writes are atomic (write-then-rename), so a partial file is never synced or read. Hand-editing
-the file is a supported workflow.
+Because the strip mirrors tmux, a hidden session is the only way to have a running session with no
+tab. That hidden list is per-machine-config, so another machine opening the same config still sees
+every session as a tab.
+
+Session names are restricted to `[A-Za-z0-9_-]` — tmux forbids `.` and `:`, and anything needing
+shell quoting would have to survive a trip through `ssh`.
+
+## Config
+
+Everything lives in one JSON file, default `~/.rippon/config.json`, relocatable with `⌘⇧O` or from
+the settings modal. Point it at a synced folder to carry your layout across machines:
 
 ```jsonc
 {
-  "version": 1,
-  "activeTabId": "tab-a1b2c3",
-  "tabs": [
-    {
-      "id": "tab-a1b2c3",
-      "title": "auth-refactor",
-      "ssh": {
-        "host": "agent-box",              // any ~/.ssh/config alias, or user@host
-        "command": "tmux new -A -s agent", // blank = login shell
-        "args": ["-o", "ServerAliveInterval=30"],
-        "autoConnect": false               // true = connect at launch, not on first view
-      },
-      "browser": { "url": "https://github.com/org/repo/pull/42" },
+  "version": 2,
+  "ssh": {
+    "host": "ubuntu@10.223.234.74",
+    "args": ["-i", "/Users/you/rv-prototype-key.pem"],
+    "newSessionCommand": "claude"   // optional, runs inside each session you create
+  },
+  "activeSession": "auth-refactor",
+  "hidden": ["scratch"],            // running, but no tab
+  "sessions": {
+    "auth-refactor": {
+      "url": "https://github.com/org/repo/pull/42",
       "splitRatio": 0.5
     }
-  ]
+  }
 }
 ```
 
-`splitRatio` and `browser.url` are written back as you drag the divider and browse, so a tab
-reopens exactly where you left it.
+`sessions` is keyed by tmux session name and holds only local decoration — the browser URL and
+split position, written back as you browse and drag. The session list itself is never stored; it
+always comes from the host. The file is watched by polling, so a Drive/Dropbox sync that swaps the
+inode is still picked up live, and writes are atomic (write-then-rename).
 
-### SSH
+## SSH
 
-Rippon spawns your system `ssh` binary, so `~/.ssh/config` aliases, `ProxyJump`, agent
-forwarding, Yubikey/1Password agents and interactive MFA prompts all work exactly as they do in
-a normal terminal. No credentials are stored by the app.
+Rippon spawns your system `ssh` binary, so `~/.ssh/config` aliases, `ProxyJump`, agent forwarding,
+Yubikey/1Password agents and interactive MFA all work as they do in a normal terminal. No
+credentials are stored by the app.
 
-Sessions connect lazily the first time you open a tab (or at launch with `autoConnect`), and stay
-alive in the background when you switch tabs. Pair it with `tmux new -A -s <name>` so the agent
-survives a reconnect too.
+All invocations share one multiplexed connection (`ControlMaster=auto`, socket under `~/.rippon/`,
+`ControlPersist=120`), so the frequent list/create/kill calls cost no handshake and no second round
+of auth prompts.
 
-### Cookies
+One caveat: those control calls have no TTY. If the host key is unknown or your key needs an
+interactive passphrase with no agent loaded, they fail with the ssh error shown in the app's error
+bar. `ssh` to the host once from a terminal and it sorts itself out.
 
-All browser panes share one persistent session (`persist:rippon-browser`), so you log into GitHub
-once and every tab is logged in. The session survives restarts. `window.open` popups (SSO flows)
-get a real window on the same session; plain `target=_blank` links navigate the pane in place.
+Extra flags are split on spaces, so key paths must be absolute and free of spaces.
 
 ## Keyboard
 
 | | |
 |---|---|
-| `⌘T` / `⌘W` | new tab / close tab |
+| `⌘T` | new tmux session |
+| `⌘W` | close tab (asks about killing) |
 | `⌘1`–`⌘9` | jump to tab |
 | `⌃Tab` / `⌃⇧Tab` | cycle tabs |
+| `⌘⇧L` | refresh session list now |
 | `⌘L` | focus the address bar |
 | `⌘J` | focus the terminal |
 | `⌘R` | reload the browser pane |
-| `⌘⇧R` | reconnect SSH |
+| `⌘⇧R` | reattach the session |
+| `⌘,` | SSH settings |
 | `⌘⇧O` | choose the config file |
-
-Double-click a tab (or its ⚙) to edit its host, command, and URL.
 
 ## Layout
 
 ```
 src/
-  main/       Electron main — window, menus, config store, PTY manager
+  main/       Electron main — window, menus, config store, tmux-over-ssh, PTY manager
   preload/    contextBridge API surface (window.rippon)
-  renderer/   React UI — tab strip, terminal pane, browser pane
+  renderer/   React UI — tab strip, terminal pane, browser pane, dialogs
   shared/     config types + normalization, used by both sides
 ```

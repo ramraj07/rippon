@@ -11,7 +11,8 @@ import {
 import path from 'node:path'
 import { ConfigStore } from './config'
 import { PtyManager } from './pty'
-import type { RipponConfig, SshConfig } from '../shared/types'
+import { createSession, killSession, listSessions, renameSession } from './tmux'
+import type { RipponConfig, SessionInfo, SshConfig } from '../shared/types'
 
 /** Every browser pane shares this session, so a GitHub login in one tab is a login in all of them. */
 const BROWSER_PARTITION = 'persist:rippon-browser'
@@ -105,22 +106,54 @@ function buildMenu(): void {
   }))
 
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    ...(isMac
+      ? [
+          {
+            role: 'appMenu' as const,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              {
+                label: 'SSH Settings…',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => send('menu:settings')
+              },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
-        { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => send('menu:new-tab') },
-        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu:close-tab') },
+        {
+          label: 'New tmux Session…',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => send('menu:new-session')
+        },
+        { label: 'Close Tab…', accelerator: 'CmdOrCtrl+W', click: () => send('menu:close-tab') },
+        {
+          label: 'Refresh Session List',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => send('menu:refresh')
+        },
         { type: 'separator' },
+        ...(isMac
+          ? []
+          : [{ label: 'SSH Settings…', accelerator: 'Ctrl+,', click: () => send('menu:settings') }]),
         {
           label: 'Choose Config File…',
           accelerator: 'CmdOrCtrl+Shift+O',
           click: () => void pickConfigFile()
         },
-        {
-          label: 'Reveal Config File',
-          click: () => shell.showItemInFolder(configStore.filePath)
-        },
+        { label: 'Reveal Config File', click: () => shell.showItemInFolder(configStore.filePath) },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
@@ -146,7 +179,7 @@ function buildMenu(): void {
           click: () => send('menu:reload-browser')
         },
         {
-          label: 'Reconnect SSH',
+          label: 'Reattach Session',
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => send('menu:reconnect-ssh')
         },
@@ -189,6 +222,15 @@ async function pickConfigFile(): Promise<void> {
   send('config:changed', cfg, configStore.filePath)
 }
 
+/** Wrap a remote call so the renderer always gets {ok} or {error} instead of a rejection. */
+async function attempt<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await fn() }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('config:get', async () => ({
     config: await configStore.load(),
@@ -196,12 +238,24 @@ function registerIpc(): void {
   }))
   ipcMain.handle('config:save', async (_e, cfg: RipponConfig) => configStore.save(cfg))
   ipcMain.handle('config:choose-path', async () => pickConfigFile())
-  ipcMain.handle('config:reveal', () => shell.showItemInFolder(configStore.filePath))
+
+  ipcMain.handle('tmux:list', (_e, ssh: SshConfig) =>
+    attempt<SessionInfo[]>(() => listSessions(ssh))
+  )
+  ipcMain.handle('tmux:create', (_e, ssh: SshConfig, name: string) =>
+    attempt(() => createSession(ssh, name))
+  )
+  ipcMain.handle('tmux:kill', (_e, ssh: SshConfig, name: string) =>
+    attempt(() => killSession(ssh, name))
+  )
+  ipcMain.handle('tmux:rename', (_e, ssh: SshConfig, from: string, to: string) =>
+    attempt(() => renameSession(ssh, from, to))
+  )
 
   ipcMain.handle(
-    'pty:start',
-    (_e, id: string, ssh: SshConfig, cols: number, rows: number) => {
-      ptys.start(id, { ssh, cols, rows })
+    'pty:attach',
+    (_e, id: string, ssh: SshConfig, sessionName: string, cols: number, rows: number) => {
+      ptys.attach(id, ssh, sessionName, cols, rows)
     }
   )
   ipcMain.handle('pty:write', (_e, id: string, data: string) => ptys.write(id, data))
@@ -209,7 +263,6 @@ function registerIpc(): void {
     ptys.resize(id, cols, rows)
   )
   ipcMain.handle('pty:kill', (_e, id: string) => ptys.kill(id))
-  ipcMain.handle('pty:is-running', (_e, id: string) => ptys.isRunning(id))
 
   ipcMain.handle('shell:open-external', (_e, url: string) => {
     if (/^https?:/i.test(url)) void shell.openExternal(url)

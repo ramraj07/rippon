@@ -2,19 +2,20 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import type { SshConfig } from '@shared/types'
+import type { SessionInfo, SshConfig } from '@shared/types'
 
 export interface TerminalHandle {
   focus(): void
-  reconnect(): void
+  reattach(): void
 }
 
 interface Props {
-  tabId: string
+  session: SessionInfo
   ssh: SshConfig
   active: boolean
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
+  onRename(): void
 }
 
 const THEME = {
@@ -34,49 +35,45 @@ const THEME = {
 }
 
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { tabId, ssh, active, onOpenUrl },
+  { session, ssh, active, onOpenUrl, onRename },
   ref
 ) {
+  const id = session.name
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const [status, setStatus] = useState<'idle' | 'connecting' | 'running' | 'exited'>('idle')
+  const [status, setStatus] = useState<'idle' | 'attached' | 'detached'>('idle')
 
-  // Keep the latest callbacks reachable from the terminal, which is built once.
+  // Keep the latest values reachable from the terminal, which is built once.
   const openUrlRef = useRef(onOpenUrl)
   openUrlRef.current = onOpenUrl
   const sshRef = useRef(ssh)
   sshRef.current = ssh
 
-  function connect(): void {
+  function attach(): void {
     const term = termRef.current
     const fit = fitRef.current
     if (!term || !fit) return
-    if (!sshRef.current.host) {
-      term.writeln('\x1b[33mNo SSH host configured for this tab. Open tab settings (⚙) to set one.\x1b[0m')
-      return
-    }
     try {
       fit.fit()
     } catch {
       // not laid out yet; the pty gets a sane default and we resize on the next fit
     }
-    setStatus('connecting')
-    term.write(`\x1b[2m→ ssh ${sshRef.current.host}\x1b[0m\r\n`)
-    void window.rippon.pty.start(tabId, sshRef.current, term.cols, term.rows)
-    setStatus('running')
+    term.write(`\x1b[2m→ attaching to ${id}\x1b[0m\r\n`)
+    void window.rippon.pty.attach(id, sshRef.current, id, term.cols, term.rows)
+    setStatus('attached')
   }
 
   useImperativeHandle(ref, () => ({
     focus: () => termRef.current?.focus(),
-    reconnect: () => {
+    reattach: () => {
       termRef.current?.reset()
-      void window.rippon.pty.kill(tabId)
-      connect()
+      void window.rippon.pty.kill(id)
+      attach()
     }
   }))
 
-  // Build the terminal once per tab and keep it alive while the tab is hidden.
+  // Build the terminal once and keep it alive while the tab is hidden.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
@@ -91,9 +88,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       allowProposedApi: true,
       theme: THEME,
       // OSC 8 hyperlinks (what most agents emit for PR links).
-      linkHandler: {
-        activate: (_event, uri) => openUrlRef.current(uri)
-      }
+      linkHandler: { activate: (_event, uri) => openUrlRef.current(uri) }
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -104,22 +99,22 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     termRef.current = term
     fitRef.current = fit
 
-    const onDataDisposable = term.onData((data) => void window.rippon.pty.write(tabId, data))
+    const onDataDisposable = term.onData((data) => void window.rippon.pty.write(id, data))
 
-    const offData = window.rippon.pty.onData((id, data) => {
-      if (id === tabId) term.write(data)
+    const offData = window.rippon.pty.onData((ptyId, data) => {
+      if (ptyId === id) term.write(data)
     })
-    const offExit = window.rippon.pty.onExit((id, code) => {
-      if (id !== tabId) return
-      setStatus('exited')
-      term.write(`\r\n\x1b[2m— session ended (exit ${code}). Press Enter to reconnect. —\x1b[0m\r\n`)
+    const offExit = window.rippon.pty.onExit((ptyId) => {
+      if (ptyId !== id) return
+      setStatus('detached')
+      term.write('\r\n\x1b[2m— detached. Press Enter to reattach. —\x1b[0m\r\n')
     })
 
     const observer = new ResizeObserver(() => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return
       try {
         fit.fit()
-        void window.rippon.pty.resize(tabId, term.cols, term.rows)
+        void window.rippon.pty.resize(id, term.cols, term.rows)
       } catch {
         // fit throws if the element is mid-teardown
       }
@@ -134,29 +129,31 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       term.dispose()
       termRef.current = null
       fitRef.current = null
+      // Unmount means the tab is gone; drop the ssh client. The tmux session
+      // itself is untouched and keeps running remotely.
+      void window.rippon.pty.kill(id)
     }
-  }, [tabId])
+  }, [id])
 
-  // Reconnect on Enter after the remote session ends.
+  // Reattach on Enter after a detach.
   useEffect(() => {
     const term = termRef.current
-    if (!term || status !== 'exited') return
+    if (!term || status !== 'detached') return
     const d = term.onKey(({ domEvent }) => {
       if (domEvent.key === 'Enter') {
         term.reset()
-        connect()
+        attach()
       }
     })
     return () => d.dispose()
   }, [status])
 
-  // Connect lazily: the first time the tab is shown, or immediately if autoConnect.
+  // Attach lazily, the first time the tab is shown.
   useEffect(() => {
-    if (status !== 'idle') return
-    if (!active && !ssh.autoConnect) return
-    const t = setTimeout(connect, 0)
+    if (status !== 'idle' || !active) return
+    const t = setTimeout(attach, 0)
     return () => clearTimeout(t)
-  }, [active, ssh.autoConnect, ssh.host, status])
+  }, [active, status])
 
   useEffect(() => {
     if (!active) return
@@ -166,29 +163,34 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       if (!term || !fit || !hostRef.current?.clientWidth) return
       try {
         fit.fit()
-        void window.rippon.pty.resize(tabId, term.cols, term.rows)
+        void window.rippon.pty.resize(id, term.cols, term.rows)
       } catch {
         /* ignore */
       }
       term.focus()
     }, 0)
     return () => clearTimeout(t)
-  }, [active, tabId])
+  }, [active, id])
 
   return (
     <div className="pane terminal-pane">
       <div className="pane-header">
         <span className={`dot dot-${status}`} />
-        <span className="pane-title">{ssh.host || 'no host'}</span>
-        {ssh.command ? <span className="pane-sub">{ssh.command}</span> : null}
+        <span className="pane-title" onDoubleClick={onRename} title="Double-click to rename">
+          {session.name}
+        </span>
+        <span className="pane-sub">
+          {session.windows} window{session.windows === 1 ? '' : 's'}
+          {session.attached ? ' · attached' : ''}
+        </span>
         <span className="spacer" />
         <button
           className="icon-btn"
-          title="Reconnect (⌘⇧R)"
+          title="Reattach (⌘⇧R)"
           onClick={() => {
             termRef.current?.reset()
-            void window.rippon.pty.kill(tabId)
-            connect()
+            void window.rippon.pty.kill(id)
+            attach()
           }}
         >
           ⟳
