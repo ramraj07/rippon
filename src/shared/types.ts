@@ -77,6 +77,8 @@ export interface BrowserState {
   canGoForward: boolean
   /** The page wedged its renderer; it will not repaint or resize until reloaded. */
   hung: boolean
+  /** Reason the guest process died, or null if it is alive. */
+  crashed: string | null
 }
 
 /** A tmux session as reported by the remote host. */

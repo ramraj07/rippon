@@ -34,6 +34,52 @@ export function toUrl(input: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(text)}`
 }
 
+/**
+ * Below roughly this CSS width, real sites hit their least-tested breakpoints —
+ * GitHub's PR inbox spins its renderer at 100% CPU indefinitely at ~260px, and
+ * stops the moment the layout viewport is wider. Verified in isolation with two
+ * bare WebContentsViews and no app code involved. Scaling the page down is what
+ * buys the width back, so a pane never hands a site less than this.
+ */
+const MIN_CSS_VIEWPORT = 560
+const MIN_AUTO_ZOOM = 0.25
+
+/**
+ * A native view has no CSS clipping: it is not confined to a scrolling
+ * container and not clipped by the window. A pane scrolled below the fold of a
+ * tile grid was therefore positioned off-window at full size, which paints over
+ * anything in the way and — as it turns out — leaves the guest spinning.
+ * Intersect the slot with everything that clips it and hand over that.
+ */
+function clippedRect(slot: HTMLElement): { x: number; y: number; width: number; height: number } {
+  const r = slot.getBoundingClientRect()
+  let left = r.left
+  let top = r.top
+  let right = r.right
+  let bottom = r.bottom
+
+  for (let el = slot.parentElement; el; el = el.parentElement) {
+    if (getComputedStyle(el).overflow === 'visible') continue
+    const c = el.getBoundingClientRect()
+    left = Math.max(left, c.left)
+    top = Math.max(top, c.top)
+    right = Math.min(right, c.right)
+    bottom = Math.min(bottom, c.bottom)
+  }
+
+  left = Math.max(left, 0)
+  top = Math.max(top, 0)
+  right = Math.min(right, window.innerWidth)
+  bottom = Math.min(bottom, window.innerHeight)
+
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.round(Math.max(0, right - left)),
+    height: Math.round(Math.max(0, bottom - top))
+  }
+}
+
 const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   { id, url, active, suppressed, zoom, onUrlChange, onClose },
   ref
@@ -45,6 +91,7 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   const editingRef = useRef(false)
   const [address, setAddress] = useState(url)
   const [state, setState] = useState<BrowserState | null>(null)
+  const [paneWidth, setPaneWidth] = useState(0)
 
   const visible = active && !suppressed
 
@@ -91,17 +138,13 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
       pending.current = null
       const slot = slotRef.current
       if (!slot) return
-      const r = slot.getBoundingClientRect()
-      const showing = visible && r.width >= 1 && r.height >= 1
-      const bounds = {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(r.height)
-      }
+      const bounds = clippedRect(slot)
+      // Scrolled out of the grid, or hidden: nothing to show, so show nothing.
+      const showing = visible && bounds.width >= 1 && bounds.height >= 1
       const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height},${showing}`
       if (key === lastSent.current) return
       lastSent.current = key
+      setPaneWidth(bounds.width)
       void window.rippon.browser.setBounds(id, bounds, showing)
     })
   }, [id, visible])
@@ -138,11 +181,17 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     }
   }, [syncBounds])
 
-  // Apply the view's zoom, and again after each navigation — a new origin
-  // arrives with whatever the session stored for it, which may be another view's.
+  /*
+   * The view's zoom, except never so far in that the page lays out below
+   * MIN_CSS_VIEWPORT — a narrow tile would otherwise wedge the guest. Re-applied
+   * after each navigation, since a new origin arrives carrying whatever the
+   * session last stored for it, which may be another view's value.
+   */
   useEffect(() => {
-    void window.rippon.browser.setZoom(id, zoom)
-  }, [id, zoom, state?.url])
+    const fitted = paneWidth > 0 ? paneWidth / MIN_CSS_VIEWPORT : 1
+    const effective = Math.max(MIN_AUTO_ZOOM, Math.min(zoom, fitted))
+    void window.rippon.browser.setZoom(id, effective)
+  }, [id, zoom, paneWidth, state?.url])
 
   // Track navigation happening inside the view.
   useEffect(() => {
@@ -231,9 +280,11 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
           ×
         </button>
       </div>
-      {state?.hung ? (
+      {state?.crashed || state?.hung ? (
         <div className="hung-bar">
-          This page has stopped responding and will not redraw or resize.
+          {state.crashed
+            ? `This page crashed (${state.crashed}).`
+            : 'This page has stopped responding and will not redraw or resize.'}
           <button onClick={() => void window.rippon.browser.reload(id)}>reload</button>
         </div>
       ) : null}

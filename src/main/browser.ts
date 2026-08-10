@@ -34,6 +34,7 @@ export class BrowserViews extends EventEmitter {
   private applyTimers = new Map<string, NodeJS.Timeout>()
   private lastApplied = new Map<string, number>()
   private hung = new Set<string>()
+  private crashed = new Map<string, string>()
 
   attach(win: BrowserWindow): void {
     this.window = win
@@ -52,7 +53,8 @@ export class BrowserViews extends EventEmitter {
       loading: wc.isLoading(),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
-      hung: this.hung.has(id)
+      hung: this.hung.has(id),
+      crashed: this.crashed.get(id) ?? null
     }
     this.emit('state', id, state)
   }
@@ -105,6 +107,18 @@ export class BrowserViews extends EventEmitter {
     wc.on('unresponsive', () => {
       this.hung.add(id)
       update()
+    })
+    // Without this a dead guest is just a blank rectangle with no explanation.
+    wc.on('render-process-gone', (_e, details) => {
+      console.error(
+        `[browser] ${id} renderer gone: ${details.reason} exitCode=${details.exitCode}`
+      )
+      this.crashed.set(id, details.reason)
+      this.hung.delete(id)
+      update()
+    })
+    wc.on('did-start-loading', () => {
+      this.crashed.delete(id)
     })
     wc.on('responsive', () => {
       this.hung.delete(id)

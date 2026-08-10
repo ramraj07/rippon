@@ -77,6 +77,21 @@ function createWindow(): void {
     console.error(`[preload] ${preloadPath}: ${error.message}`)
   })
 
+  if (process.env['RIPPON_DEBUG_MAXIMIZE']) {
+    setTimeout(() => {
+      console.log('[debug] maximize')
+      mainWindow?.maximize()
+    }, 18000)
+    setTimeout(() => {
+      console.log('[debug] unmaximize')
+      mainWindow?.unmaximize()
+    }, 28000)
+    setTimeout(() => {
+      console.log('[debug] maximize again')
+      mainWindow?.maximize()
+    }, 36000)
+  }
+
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
