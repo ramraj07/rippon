@@ -201,6 +201,12 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
           ×
         </button>
       </div>
+      {state?.hung ? (
+        <div className="hung-bar">
+          This page has stopped responding and will not redraw or resize.
+          <button onClick={() => void window.rippon.browser.reload(id)}>reload</button>
+        </div>
+      ) : null}
       <div className="webview-host" ref={slotRef} />
     </div>
   )

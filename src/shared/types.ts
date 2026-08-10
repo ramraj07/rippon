@@ -61,6 +61,8 @@ export interface BrowserState {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
+  /** The page wedged its renderer; it will not repaint or resize until reloaded. */
+  hung: boolean
 }
 
 /** A tmux session as reported by the remote host. */

@@ -6,6 +6,15 @@ import type { BrowserState } from '../shared/types'
 export const BROWSER_PARTITION = 'persist:rippon-browser'
 
 /**
+ * A tile in a busy grid can be 200px wide. Sites are not built for that: their
+ * narrowest breakpoints are the least tested paths, and at least one — GitHub's
+ * PR inbox — spins its renderer at 100% CPU indefinitely there. Scale the page
+ * down instead so the guest always lays out at a width sites actually support.
+ */
+const TARGET_VIEWPORT_WIDTH = 760
+const MIN_ZOOM = 0.34
+
+/**
  * Browser panes are WebContentsViews owned by the main process, with bounds
  * pushed from the renderer. The deprecated <webview> tag derives its guest size
  * from CSS, which does not reliably follow flex or survive a hidden ancestor —
@@ -17,6 +26,10 @@ export const BROWSER_PARTITION = 'persist:rippon-browser'
 export class BrowserViews extends EventEmitter {
   private views = new Map<string, WebContentsView>()
   private window: BrowserWindow | null = null
+  private lastLogged = new Map<string, string>()
+  private lastBounds = new Map<string, Rectangle>()
+  private lastZoom = new Map<string, number>()
+  private hung = new Set<string>()
 
   attach(win: BrowserWindow): void {
     this.window = win
@@ -34,7 +47,8 @@ export class BrowserViews extends EventEmitter {
       title: wc.getTitle(),
       loading: wc.isLoading(),
       canGoBack: wc.navigationHistory.canGoBack(),
-      canGoForward: wc.navigationHistory.canGoForward()
+      canGoForward: wc.navigationHistory.canGoForward(),
+      hung: this.hung.has(id)
     }
     this.emit('state', id, state)
   }
@@ -77,22 +91,67 @@ export class BrowserViews extends EventEmitter {
     wc.on('did-stop-loading', update)
     wc.on('page-title-updated', update)
 
+    // A page that wedges its renderer stops laying out, so it also stops
+    // following the pane's size. Surface it rather than leaving a frozen pane.
+    wc.on('unresponsive', () => {
+      this.hung.add(id)
+      update()
+    })
+    wc.on('responsive', () => {
+      this.hung.delete(id)
+      update()
+    })
+
     void wc.loadURL(url).catch(() => undefined)
   }
 
   setBounds(id: string, bounds: Rectangle, visible: boolean): void {
     const view = this.views.get(id)
-    if (!view) return
+    if (!view) {
+      if (process.env['RIPPON_TRACE']) console.log(`[bounds] ${id}: NO VIEW`)
+      return
+    }
+    if (process.env['RIPPON_TRACE']) {
+      // Only when the geometry actually changes — a drag fires this every frame.
+      const key = `${Math.round(bounds.width)}x${Math.round(bounds.height)}@${Math.round(bounds.x)},${Math.round(bounds.y)}:${visible}`
+      if (key !== this.lastLogged.get(id)) {
+        this.lastLogged.set(id, key)
+        console.log(`[bounds] ${id} ${key}`)
+        setTimeout(() => {
+          view.webContents
+            .executeJavaScript('innerWidth + "x" + innerHeight')
+            .then((g) => console.log(`[guest]  ${id} viewport ${g}  (bounds were ${key})`))
+            .catch(() => undefined)
+        }, 500)
+      }
+    }
     if (!visible || bounds.width < 1 || bounds.height < 1) {
       view.setVisible(false)
       return
     }
-    view.setBounds({
+    const next = {
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
       width: Math.round(bounds.width),
       height: Math.round(bounds.height)
-    })
+    }
+    const prev = this.lastBounds.get(id)
+    if (
+      !prev ||
+      prev.x !== next.x ||
+      prev.y !== next.y ||
+      prev.width !== next.width ||
+      prev.height !== next.height
+    ) {
+      this.lastBounds.set(id, next)
+      view.setBounds(next)
+
+      const zoom = Math.min(1, Math.max(MIN_ZOOM, next.width / TARGET_VIEWPORT_WIDTH))
+      if (Math.abs(zoom - (this.lastZoom.get(id) ?? 1)) > 0.01) {
+        this.lastZoom.set(id, zoom)
+        if (!view.webContents.isDestroyed()) view.webContents.setZoomFactor(zoom)
+      }
+    }
     view.setVisible(true)
   }
 
@@ -130,6 +189,10 @@ export class BrowserViews extends EventEmitter {
     const view = this.views.get(id)
     if (!view) return
     this.views.delete(id)
+    this.lastBounds.delete(id)
+    this.lastZoom.delete(id)
+    this.lastLogged.delete(id)
+    this.hung.delete(id)
     this.window?.contentView.removeChildView(view)
     view.webContents.close()
   }

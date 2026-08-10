@@ -707,6 +707,25 @@ body {
   border-color: var(--accent);
 }
 
+.hung-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  background: #3a2a1f;
+  color: #e0af68;
+  font-size: 11px;
+}
+
+.hung-bar button {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 /*
  * Placeholder only. The page itself is a WebContentsView owned by the main
  * process, positioned over this rectangle — see syncBounds in BrowserPane.

@@ -11,6 +11,7 @@ import type { SshConfig } from '../shared/types'
  */
 export class PtyManager extends EventEmitter {
   private sessions = new Map<string, pty.IPty>()
+  private lastLogged = new Map<string, string>()
 
   isRunning(id: string): boolean {
     return this.sessions.has(id)
@@ -44,7 +45,17 @@ export class PtyManager extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): void {
     const proc = this.sessions.get(id)
-    if (!proc) return
+    if (!proc) {
+      if (process.env['RIPPON_TRACE']) console.log(`[pty] ${id}: resize with no session`)
+      return
+    }
+    if (process.env['RIPPON_TRACE']) {
+      const key = `${cols}x${rows}`
+      if (key !== this.lastLogged.get(id)) {
+        this.lastLogged.set(id, key)
+        console.log(`[pty] ${id} resize ${key}`)
+      }
+    }
     try {
       proc.resize(Math.max(cols, 2), Math.max(rows, 2))
     } catch {

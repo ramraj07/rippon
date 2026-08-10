@@ -62,6 +62,21 @@ function createWindow(): void {
   browsers.attach(mainWindow)
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
+  // The renderer is where nearly all of this app lives, and a crash there is
+  // otherwise invisible: the window just sits blank with an empty main log.
+  mainWindow.webContents.on(
+    'console-message',
+    (_e, level: number, message: string, line: number, sourceId: string) => {
+      if (level >= 2) console.error(`[renderer] ${message}  (${sourceId}:${line})`)
+    }
+  )
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[renderer gone]', JSON.stringify(details))
+  })
+  mainWindow.webContents.on('preload-error', (_e, preloadPath, error) => {
+    console.error(`[preload] ${preloadPath}: ${error.message}`)
+  })
+
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
