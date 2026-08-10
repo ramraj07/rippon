@@ -707,6 +707,36 @@ body {
   border-color: var(--accent);
 }
 
+.crash-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 40px;
+  overflow: auto;
+  user-select: text;
+}
+
+.crash-screen h1 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--danger);
+}
+
+.crash-screen pre {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
 .hung-bar {
   display: flex;
   align-items: center;
