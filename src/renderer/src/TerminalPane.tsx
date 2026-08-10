@@ -116,6 +116,15 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       // Every open session holds its own buffer, so this is paid per pane.
       scrollback: 10000,
       allowProposedApi: true,
+      /*
+       * xterm defaults this to true on macOS, which meant right-clicking
+       * re-selected the word under the pointer and threw away whatever had just
+       * been dragged — so Copy only ever got that one word.
+       */
+      rightClickSelectsWord: false,
+      // Lets Option-drag select locally even when an app has grabbed the mouse,
+      // which is what tmux does with `set -g mouse on`.
+      macOptionClickForcesSelection: true,
       theme: THEME,
       // OSC 8 hyperlinks (what most agents emit for PR links).
       linkHandler: { activate: (_event, uri) => openUrlRef.current(uri) }
