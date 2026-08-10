@@ -25,6 +25,7 @@ export class BrowserViews extends EventEmitter {
   private window: BrowserWindow | null = null
   private lastLogged = new Map<string, string>()
   private lastBounds = new Map<string, Rectangle>()
+  private lastVisible = new Map<string, boolean>()
   private hung = new Set<string>()
 
   attach(win: BrowserWindow): void {
@@ -130,8 +131,13 @@ export class BrowserViews extends EventEmitter {
         }, 500)
       }
     }
+    // Every one of these is a compositor change for the guest, so only make
+    // them when something actually differs.
     if (!visible || bounds.width < 1 || bounds.height < 1) {
-      view.setVisible(false)
+      if (this.lastVisible.get(id) !== false) {
+        this.lastVisible.set(id, false)
+        view.setVisible(false)
+      }
       return
     }
     const next = {
@@ -151,7 +157,10 @@ export class BrowserViews extends EventEmitter {
       this.lastBounds.set(id, next)
       view.setBounds(next)
     }
-    view.setVisible(true)
+    if (this.lastVisible.get(id) !== true) {
+      this.lastVisible.set(id, true)
+      view.setVisible(true)
+    }
   }
 
   private act(id: string, fn: (wc: Electron.WebContents) => void): void {
@@ -189,6 +198,7 @@ export class BrowserViews extends EventEmitter {
     if (!view) return
     this.views.delete(id)
     this.lastBounds.delete(id)
+    this.lastVisible.delete(id)
     this.lastLogged.delete(id)
     this.hung.delete(id)
     this.window?.contentView.removeChildView(view)

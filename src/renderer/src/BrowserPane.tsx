@@ -80,6 +80,9 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
    * does not flood the IPC channel.
    */
   const pending = useRef<number | null>(null)
+  /** Last rectangle actually sent, so an unchanged one costs no IPC. */
+  const lastSent = useRef('')
+
   const syncBounds = useCallback(() => {
     if (pending.current !== null) return
     pending.current = requestAnimationFrame(() => {
@@ -87,11 +90,17 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
       const slot = slotRef.current
       if (!slot) return
       const r = slot.getBoundingClientRect()
-      void window.rippon.browser.setBounds(
-        id,
-        { x: r.left, y: r.top, width: r.width, height: r.height },
-        visible && r.width >= 1 && r.height >= 1
-      )
+      const showing = visible && r.width >= 1 && r.height >= 1
+      const bounds = {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width: Math.round(r.width),
+        height: Math.round(r.height)
+      }
+      const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height},${showing}`
+      if (key === lastSent.current) return
+      lastSent.current = key
+      void window.rippon.browser.setBounds(id, bounds, showing)
     })
   }, [id, visible])
 
@@ -99,16 +108,29 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     const slot = slotRef.current
     if (!slot) return
     syncBounds()
+
     const observer = new ResizeObserver(syncBounds)
     observer.observe(slot)
-    // Resizing the window moves the slot without resizing it in some layouts,
-    // and a scrolling tile grid moves it without any resize at all.
     window.addEventListener('resize', syncBounds)
-    window.addEventListener('scroll', syncBounds, true)
+
+    /*
+     * Scrolling moves the pane without resizing it, so it has to be watched —
+     * but only where it can actually happen. A capture listener on window sees
+     * every scroll in the app, including the terminal viewport, which scrolls
+     * on every line an agent prints. That turned agent output into a per-frame
+     * forced layout plus an IPC round trip per pane.
+     */
+    const scrollers: EventTarget[] = []
+    for (let el = slot.parentElement; el; el = el.parentElement) {
+      const overflow = getComputedStyle(el).overflow
+      if (overflow.includes('auto') || overflow.includes('scroll')) scrollers.push(el)
+    }
+    for (const target of scrollers) target.addEventListener('scroll', syncBounds, { passive: true })
+
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', syncBounds)
-      window.removeEventListener('scroll', syncBounds, true)
+      for (const target of scrollers) target.removeEventListener('scroll', syncBounds)
       if (pending.current !== null) cancelAnimationFrame(pending.current)
       pending.current = null
     }
