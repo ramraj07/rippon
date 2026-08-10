@@ -20,18 +20,29 @@ const configStore = new ConfigStore()
 const ptys = new PtyManager()
 const browsers = new BrowserViews()
 let mainWindow: BrowserWindow | null = null
+/**
+ * Set the moment teardown starts. The render frame is disposed before the
+ * window reports itself destroyed, and webContents.send logs its own error
+ * asynchronously from inside — a try/catch around the call cannot suppress it.
+ * The only fix is to stop sending, so pty output in flight is dropped here.
+ */
+let shuttingDown = false
 
 function send(channel: string, ...args: unknown[]): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  try {
-    mainWindow.webContents.send(channel, ...args)
-  } catch {
-    // During teardown the render frame can be disposed while the window still
-    // looks alive; in-flight pty output would otherwise throw on every chunk.
-  }
+  if (shuttingDown || !mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.webContents.isDestroyed()) return
+  mainWindow.webContents.send(channel, ...args)
+}
+
+function beginShutdown(): void {
+  shuttingDown = true
+  ptys.killAll()
+  browsers.destroyAll()
 }
 
 function createWindow(): void {
+  // On macOS the app outlives its window, so a reopen starts a fresh session.
+  shuttingDown = false
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -58,6 +69,7 @@ function createWindow(): void {
     void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
+  mainWindow.on('close', beginShutdown)
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -307,7 +319,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  ptys.killAll()
-  browsers.destroyAll()
+  beginShutdown()
   configStore.dispose()
 })
