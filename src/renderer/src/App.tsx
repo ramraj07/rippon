@@ -24,6 +24,8 @@ import {
 
 const SAVE_DEBOUNCE_MS = 400
 const POLL_MS = 5000
+/** Roughly the rendered height of the tab context menu, used to keep it on screen. */
+const CTX_MENU_HEIGHT = 84
 
 type Dialog =
   | { kind: 'settings' }
@@ -40,6 +42,7 @@ export default function App(): JSX.Element {
   const [listError, setListError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{ name: string; x: number; y: number } | null>(null)
 
   const terminals = useRef(new Map<string, TerminalHandle | null>())
   const browsers = useRef(new Map<string, BrowserHandle | null>())
@@ -329,7 +332,16 @@ export default function App(): JSX.Element {
                 className={`vtab ${s.name === activeName ? 'vtab-active' : ''}`}
                 onClick={() => selectSession(s.name)}
                 onDoubleClick={() => setDialog({ kind: 'rename', name: s.name })}
-                title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click to rename`}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  // Keep the menu on screen when right-clicking near the bottom.
+                  setCtxMenu({
+                    name: s.name,
+                    x: e.clientX,
+                    y: Math.min(e.clientY, window.innerHeight - CTX_MENU_HEIGHT)
+                  })
+                }}
+                title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click or right-click to rename`}
               >
                 <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
                 <span className="vtab-text">
@@ -409,6 +421,37 @@ export default function App(): JSX.Element {
           ))}
         </main>
       </div>
+
+      {ctxMenu ? (
+        <>
+          <div
+            className="menu-scrim"
+            onMouseDown={() => setCtxMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setCtxMenu(null)
+            }}
+          />
+          <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+            <button
+              onClick={() => {
+                setDialog({ kind: 'rename', name: ctxMenu.name })
+                setCtxMenu(null)
+              }}
+            >
+              Rename session…
+            </button>
+            <button
+              onClick={() => {
+                setDialog({ kind: 'close', name: ctxMenu.name })
+                setCtxMenu(null)
+              }}
+            >
+              Close tab…
+            </button>
+          </div>
+        </>
+      ) : null}
 
       {dialog?.kind === 'settings' ? (
         <SshSettings
