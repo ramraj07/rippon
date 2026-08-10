@@ -120,8 +120,10 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
         webgl = null
       })
       term.loadAddon(webgl)
-    } catch {
+    } catch (err) {
       webgl = null
+      // Worth knowing: the DOM fallback is what pegs this renderer under load.
+      console.warn(`[rippon] WebGL terminal renderer unavailable for ${id}:`, err)
     }
 
     termRef.current = term

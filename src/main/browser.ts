@@ -102,7 +102,14 @@ export class BrowserViews extends EventEmitter {
       update()
     })
 
-    void wc.loadURL(url).catch(() => undefined)
+    void wc.loadURL(url).then(
+      () => {
+        if (process.env['RIPPON_TRACE']) {
+          console.log(`[view] ${id} guest renderer os pid = ${wc.getOSProcessId()}`)
+        }
+      },
+      () => undefined
+    )
   }
 
   setBounds(id: string, bounds: Rectangle, visible: boolean): void {
