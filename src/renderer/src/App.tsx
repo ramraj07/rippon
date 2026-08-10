@@ -14,6 +14,8 @@ import { CloseSessionDialog, NameDialog } from './Dialogs'
 import {
   defaultConfig,
   defaultSession,
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
   type RipponConfig,
   type SessionConfig,
   type SessionInfo,
@@ -37,7 +39,7 @@ export default function App(): JSX.Element {
   const [ready, setReady] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<Dialog>(null)
-  const [addMenu, setAddMenu] = useState(false)
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
 
   const terminals = useRef(new Map<string, TerminalHandle | null>())
   const browsers = useRef(new Map<string, BrowserHandle | null>())
@@ -193,6 +195,31 @@ export default function App(): JSX.Element {
     [commit, refresh]
   )
 
+  const restoreSession = useCallback(
+    (name: string) => {
+      const cur = configRef.current
+      commit({ ...cur, hidden: cur.hidden.filter((h) => h !== name), activeSession: name })
+    },
+    [commit]
+  )
+
+  function startSidebarDrag(e: ReactPointerEvent<HTMLDivElement>): void {
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const move = (ev: PointerEvent): void => {
+      setDragWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX)))
+    }
+    const up = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDragWidth((final) => {
+        if (final !== null) commit({ ...configRef.current, sidebarWidth: final })
+        return null
+      })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   const saveSsh = useCallback(
     (ssh: SshConfig) => {
       setDialog(null)
@@ -275,72 +302,6 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <header className="titlebar">
-        <div className="tabstrip">
-          {visible.map((s) => (
-            <div
-              key={s.name}
-              className={`tab ${s.name === activeName ? 'tab-active' : ''}`}
-              onClick={() => selectSession(s.name)}
-              onDoubleClick={() => setDialog({ kind: 'rename', name: s.name })}
-              title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}`}
-            >
-              <span className="tab-title">{s.name}</span>
-              <button
-                className="tab-close"
-                title="Close tab"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setDialog({ kind: 'close', name: s.name })
-                }}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-
-          <div className="add-wrap">
-            <button
-              className="tab-add"
-              title="New session (⌘T)"
-              onClick={() => (hiddenExisting.length ? setAddMenu((v) => !v) : setDialog({ kind: 'new' }))}
-            >
-              +
-            </button>
-            {addMenu ? (
-              <>
-                <div className="menu-scrim" onClick={() => setAddMenu(false)} />
-                <div className="add-menu">
-                  <button
-                    onClick={() => {
-                      setAddMenu(false)
-                      setDialog({ kind: 'new' })
-                    }}
-                  >
-                    New session…
-                  </button>
-                  <div className="menu-label">Running, not shown</div>
-                  {hiddenExisting.map((s) => (
-                    <button
-                      key={s.name}
-                      onClick={() => {
-                        setAddMenu(false)
-                        const cur = configRef.current
-                        commit({
-                          ...cur,
-                          hidden: cur.hidden.filter((h) => h !== s.name),
-                          activeSession: s.name
-                        })
-                      }}
-                    >
-                      {s.name}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
-
         <button
           className="host-btn"
           title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
@@ -348,6 +309,7 @@ export default function App(): JSX.Element {
         >
           {config.ssh.host || 'set up SSH…'} ⚙
         </button>
+        <span className="spacer" />
       </header>
 
       {listError ? (
@@ -358,37 +320,95 @@ export default function App(): JSX.Element {
         </div>
       ) : null}
 
-      <main className="tabs-body">
-        {ready && visible.length === 0 ? (
-          <div className="empty">
-            {!config.ssh.host ? (
-              <>
-                No host configured.
-                <button onClick={() => setDialog({ kind: 'settings' })}>Set up SSH</button>
-              </>
-            ) : (
-              <>
-                No tmux sessions on {config.ssh.host}.
-                <button onClick={() => setDialog({ kind: 'new' })}>Create one</button>
-              </>
-            )}
+      <div className="body-row">
+        <nav className="sidebar" style={{ width: dragWidth ?? config.sidebarWidth }}>
+          <div className="sidebar-list">
+            {visible.map((s) => (
+              <div
+                key={s.name}
+                className={`vtab ${s.name === activeName ? 'vtab-active' : ''}`}
+                onClick={() => selectSession(s.name)}
+                onDoubleClick={() => setDialog({ kind: 'rename', name: s.name })}
+                title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click to rename`}
+              >
+                <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
+                <span className="vtab-text">
+                  <span className="vtab-name">{s.name}</span>
+                  <span className="vtab-meta">
+                    {s.windows} window{s.windows === 1 ? '' : 's'}
+                    {s.attached ? ' · attached' : ''}
+                  </span>
+                </span>
+                <button
+                  className="tab-close"
+                  title="Close tab"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDialog({ kind: 'close', name: s.name })
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
-        ) : null}
 
-        {visible.map((s) => (
-          <TabPanel
-            key={s.name}
-            session={s}
-            ssh={config.ssh}
-            active={s.name === activeName}
-            settings={config.sessions[s.name] ?? defaultSession()}
-            terminals={terminals.current}
-            browsers={browsers.current}
-            onUpdate={updateSession}
-            onRename={() => setDialog({ kind: 'rename', name: s.name })}
-          />
-        ))}
-      </main>
+          <div className="sidebar-footer">
+            {hiddenExisting.length ? (
+              <>
+                <div className="menu-label">Running, not shown</div>
+                {hiddenExisting.map((s) => (
+                  <button
+                    key={s.name}
+                    className="hidden-item"
+                    title="Show this session again"
+                    onClick={() => restoreSession(s.name)}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </>
+            ) : null}
+            <button className="new-session-btn" onClick={() => setDialog({ kind: 'new' })}>
+              + New session
+            </button>
+          </div>
+        </nav>
+
+        <div className="sidebar-resizer" onPointerDown={startSidebarDrag} />
+
+        <main className="tabs-body">
+          {ready && visible.length === 0 ? (
+            <div className="empty">
+              {!config.ssh.host ? (
+                <>
+                  No host configured.
+                  <button onClick={() => setDialog({ kind: 'settings' })}>Set up SSH</button>
+                </>
+              ) : (
+                <>
+                  No tmux sessions on {config.ssh.host}.
+                  <button onClick={() => setDialog({ kind: 'new' })}>Create one</button>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {visible.map((s) => (
+            <TabPanel
+              key={s.name}
+              session={s}
+              ssh={config.ssh}
+              active={s.name === activeName}
+              settings={config.sessions[s.name] ?? defaultSession()}
+              terminals={terminals.current}
+              browsers={browsers.current}
+              onUpdate={updateSession}
+              onRename={() => setDialog({ kind: 'rename', name: s.name })}
+            />
+          ))}
+        </main>
+      </div>
 
       {dialog?.kind === 'settings' ? (
         <SshSettings

@@ -22,8 +22,12 @@ const ptys = new PtyManager()
 let mainWindow: BrowserWindow | null = null
 
 function send(channel: string, ...args: unknown[]): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
     mainWindow.webContents.send(channel, ...args)
+  } catch {
+    // During teardown the render frame can be disposed while the window still
+    // looks alive; in-flight pty output would otherwise throw on every chunk.
   }
 }
 

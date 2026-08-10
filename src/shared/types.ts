@@ -21,8 +21,13 @@ export interface RipponConfig {
   activeSession?: string
   /** Sessions the user closed the tab for but chose to keep running. */
   hidden: string[]
+  /** Width of the vertical tab rail, in px. */
+  sidebarWidth: number
   sessions: Record<string, SessionConfig>
 }
+
+export const SIDEBAR_MIN = 140
+export const SIDEBAR_MAX = 400
 
 /** A tmux session as reported by the remote host. */
 export interface SessionInfo {
@@ -39,6 +44,7 @@ export function defaultConfig(): RipponConfig {
     version: CONFIG_VERSION,
     ssh: { host: '', args: [] },
     hidden: [],
+    sidebarWidth: 210,
     sessions: {}
   }
 }
@@ -95,6 +101,10 @@ export function normalizeConfig(raw: unknown): RipponConfig {
   out.hidden = Array.isArray(cfg.hidden)
     ? [...new Set(cfg.hidden.filter((h): h is string => typeof h === 'string'))]
     : []
+
+  if (typeof cfg.sidebarWidth === 'number' && Number.isFinite(cfg.sidebarWidth)) {
+    out.sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(cfg.sidebarWidth)))
+  }
 
   if (typeof cfg.activeSession === 'string') out.activeSession = cfg.activeSession
 
