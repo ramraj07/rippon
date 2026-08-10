@@ -50,6 +50,8 @@ const api = {
       ipcRenderer.invoke('browser:bounds', id, bounds, visible),
     navigate: (id: string, url: string): Promise<void> =>
       ipcRenderer.invoke('browser:navigate', id, url),
+    setZoom: (id: string, factor: number): Promise<void> =>
+      ipcRenderer.invoke('browser:zoom', id, factor),
     back: (id: string): Promise<void> => ipcRenderer.invoke('browser:back', id),
     forward: (id: string): Promise<void> => ipcRenderer.invoke('browser:forward', id),
     reload: (id: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
@@ -67,6 +69,7 @@ const api = {
       'menu:cycle-view',
       'menu:close-tab',
       'menu:refresh',
+      'menu:zoom',
       'menu:settings',
       'menu:focus-address',
       'menu:focus-terminal',

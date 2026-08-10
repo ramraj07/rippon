@@ -38,6 +38,20 @@ export interface View {
   tiles: (string | null)[]
   /** Vertical tab views: rail width in px. */
   sidebarWidth: number
+  /**
+   * Zoom for this view's browser panes. Chromium keeps zoom per origin on the
+   * session, so it cannot differ between panes showing the same site — but a
+   * whole view can carry its own, re-applied whenever the view becomes active.
+   */
+  zoom: number
+}
+
+export const ZOOM_MIN = 0.3
+export const ZOOM_MAX = 2
+export const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5]
+
+export function clampZoom(value: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 100) / 100))
 }
 
 export interface RipponConfig {
@@ -99,6 +113,7 @@ export function defaultView(id: string, partial: Partial<View> = {}): View {
     columns: 2,
     tiles: [],
     sidebarWidth: 210,
+    zoom: 1,
     ...partial
   }
 }
@@ -167,7 +182,8 @@ function normalizeView(raw: unknown, index: number): View {
     sidebarWidth:
       typeof v.sidebarWidth === 'number' && Number.isFinite(v.sidebarWidth)
         ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(v.sidebarWidth)))
-        : 210
+        : 210,
+    zoom: typeof v.zoom === 'number' && Number.isFinite(v.zoom) ? clampZoom(v.zoom) : 1
   }
 }
 

@@ -22,6 +22,7 @@ import {
 import {
   defaultSession,
   defaultView,
+  clampZoom,
   MAX_COLUMNS,
   MAX_TILES,
   normalizeConfig,
@@ -308,7 +309,7 @@ export default function App(): JSX.Element {
   )
 
   const addView = useCallback(
-    (name: string, type: ViewType) => {
+    (name: string, type: ViewType, zoom: number) => {
       setDialog(null)
       const cur = configRef.current
       const id = makeViewId()
@@ -317,6 +318,7 @@ export default function App(): JSX.Element {
       const v = defaultView(id, {
         name,
         type,
+        zoom,
         columns: suggestColumns(names.length),
         tiles: type === 'tiled' ? names.slice(0, MAX_TILES) : []
       })
@@ -326,7 +328,7 @@ export default function App(): JSX.Element {
   )
 
   const editView = useCallback(
-    (id: string, name: string, type: ViewType) => {
+    (id: string, name: string, type: ViewType, zoom: number) => {
       setDialog(null)
       const cur = configRef.current
       commit({
@@ -339,7 +341,7 @@ export default function App(): JSX.Element {
               ? sessions.filter((s) => !v.hidden.includes(s.name)).map((s) => s.name).slice(0, MAX_TILES)
               : v.tiles
           const columns = type === 'tiled' && !v.tiles.length ? suggestColumns(tiles.length) : v.columns
-          return { ...v, name, type, tiles, columns }
+          return { ...v, name, type, tiles, columns, zoom }
         })
       })
     },
@@ -445,7 +447,7 @@ export default function App(): JSX.Element {
             label: VIEW_TYPE_LABELS[t],
             checked: v.type === t,
             separator: i === 0,
-            onClick: () => editView(v.id, v.name, t)
+            onClick: () => editView(v.id, v.name, t, v.zoom)
           })),
           ...(cur.views.length > 1
             ? [
@@ -511,6 +513,12 @@ export default function App(): JSX.Element {
           return setDialog({ kind: 'settings' })
         case 'menu:refresh':
           return void refresh()
+        case 'menu:zoom': {
+          const step = typeof payload === 'number' ? payload : 0
+          return updateView((v) => ({
+            zoom: step === 0 ? 1 : clampZoom(v.zoom * (step > 0 ? 1.1 : 1 / 1.1))
+          }))
+        }
         case 'menu:close-tab':
           return name ? setDialog({ kind: 'close-session', name }) : undefined
         case 'menu:cycle-view': {
@@ -541,7 +549,7 @@ export default function App(): JSX.Element {
           return name ? terminals.current.get(name)?.reattach() : undefined
       }
     })
-  }, [activeName, indexed, refresh, selectSession, selectView])
+  }, [activeName, indexed, refresh, selectSession, selectView, updateView])
 
   // ---------- render ----------
 
@@ -778,6 +786,7 @@ export default function App(): JSX.Element {
                 ssh={config.ssh}
                 visible={visible}
                 suppressed={overlayOpen}
+                zoom={view.zoom}
                 focusOnShow={!tiled}
                 detachHidden={config.detachHidden}
                 settings={config.sessions[s.name] ?? defaultSession()}
@@ -890,7 +899,8 @@ export default function App(): JSX.Element {
           confirmLabel="Save"
           initialName={editingView.name}
           initialType={editingView.type}
-          onSubmit={(name, type) => editView(editingView.id, name, type)}
+          initialZoom={editingView.zoom}
+          onSubmit={(name, type, zoom) => editView(editingView.id, name, type, zoom)}
           onClose={() => setDialog(null)}
         />
       ) : null}
@@ -913,6 +923,7 @@ interface SessionPaneProps {
   visible: boolean
   /** Something is overlaying the app, so main-process browser views must hide. */
   suppressed: boolean
+  zoom: number
   focusOnShow: boolean
   focused: boolean
   detachHidden: boolean
@@ -932,6 +943,7 @@ function SessionPane({
   ssh,
   visible,
   suppressed,
+  zoom,
   focusOnShow,
   focused,
   detachHidden,
@@ -1048,6 +1060,7 @@ function SessionPane({
                 url={settings.url}
                 active={visible}
                 suppressed={suppressed}
+                zoom={zoom}
                 onUrlChange={onUrlChange}
                 onClose={() => onUpdate(name, { showBrowser: false })}
               />

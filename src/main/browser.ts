@@ -26,6 +26,7 @@ export class BrowserViews extends EventEmitter {
   private lastLogged = new Map<string, string>()
   private lastBounds = new Map<string, Rectangle>()
   private lastVisible = new Map<string, boolean>()
+  private lastZoom = new Map<string, number>()
   private hung = new Set<string>()
 
   attach(win: BrowserWindow): void {
@@ -82,7 +83,12 @@ export class BrowserViews extends EventEmitter {
     })
 
     const update = (): void => this.emitState(id, view)
-    wc.on('did-navigate', update)
+    // A new origin arrives with whatever zoom the session has stored for it, so
+    // drop the cache and let the renderer re-apply this view's value.
+    wc.on('did-navigate', () => {
+      this.lastZoom.delete(id)
+      update()
+    })
     wc.on('did-navigate-in-page', update)
     wc.on('did-start-loading', update)
     wc.on('did-stop-loading', update)
@@ -101,8 +107,6 @@ export class BrowserViews extends EventEmitter {
 
     void wc.loadURL(url).then(
       () => {
-        // Clears any zoom a previous build persisted onto this origin.
-        wc.setZoomFactor(1)
         if (process.env['RIPPON_TRACE']) {
           console.log(`[view] ${id} guest renderer os pid = ${wc.getOSProcessId()}`)
         }
@@ -169,6 +173,19 @@ export class BrowserViews extends EventEmitter {
     fn(view.webContents)
   }
 
+  /**
+   * Chromium stores this per origin on the session, so it is shared by every
+   * pane on the same site. The renderer re-applies the active view's value on
+   * navigation, which is what makes it behave as a per-view setting.
+   */
+  setZoom(id: string, factor: number): void {
+    const view = this.views.get(id)
+    if (!view || view.webContents.isDestroyed()) return
+    if (Math.abs((this.lastZoom.get(id) ?? 1) - factor) < 0.005) return
+    this.lastZoom.set(id, factor)
+    view.webContents.setZoomFactor(factor)
+  }
+
   navigate(id: string, url: string): void {
     this.act(id, (wc) => void wc.loadURL(url).catch(() => undefined))
   }
@@ -199,6 +216,7 @@ export class BrowserViews extends EventEmitter {
     this.views.delete(id)
     this.lastBounds.delete(id)
     this.lastVisible.delete(id)
+    this.lastZoom.delete(id)
     this.lastLogged.delete(id)
     this.hung.delete(id)
     this.window?.contentView.removeChildView(view)

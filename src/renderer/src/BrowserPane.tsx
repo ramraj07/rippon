@@ -17,6 +17,8 @@ interface Props {
    * a modal, a context menu — has to hide it.
    */
   suppressed: boolean
+  /** The active view's zoom. Re-applied on navigation, since it lives per origin. */
+  zoom: number
   onUrlChange(url: string): void
   onClose(): void
 }
@@ -33,7 +35,7 @@ export function toUrl(input: string): string {
 }
 
 const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
-  { id, url, active, suppressed, onUrlChange, onClose },
+  { id, url, active, suppressed, zoom, onUrlChange, onClose },
   ref
 ) {
   const slotRef = useRef<HTMLDivElement>(null)
@@ -135,6 +137,12 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
       pending.current = null
     }
   }, [syncBounds])
+
+  // Apply the view's zoom, and again after each navigation — a new origin
+  // arrives with whatever the session stored for it, which may be another view's.
+  useEffect(() => {
+    void window.rippon.browser.setZoom(id, zoom)
+  }, [id, zoom, state?.url])
 
   // Track navigation happening inside the view.
   useEffect(() => {

@@ -196,6 +196,22 @@ function buildMenu(): void {
           click: () => send('menu:reconnect-ssh')
         },
         { type: 'separator' },
+        {
+          label: 'Zoom In (this view)',
+          accelerator: 'CmdOrCtrl+Plus',
+          click: () => send('menu:zoom', 1)
+        },
+        {
+          label: 'Zoom Out (this view)',
+          accelerator: 'CmdOrCtrl+-',
+          click: () => send('menu:zoom', -1)
+        },
+        {
+          label: 'Actual Size',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => send('menu:zoom', 0)
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'togglefullscreen' }
       ]
@@ -293,6 +309,7 @@ function registerIpc(): void {
     browsers.setBounds(id, bounds, visible)
   )
   ipcMain.handle('browser:navigate', (_e, id: string, url: string) => browsers.navigate(id, url))
+  ipcMain.handle('browser:zoom', (_e, id: string, factor: number) => browsers.setZoom(id, factor))
   ipcMain.handle('browser:back', (_e, id: string) => browsers.goBack(id))
   ipcMain.handle('browser:forward', (_e, id: string) => browsers.goForward(id))
   ipcMain.handle('browser:reload', (_e, id: string) => browsers.reload(id))

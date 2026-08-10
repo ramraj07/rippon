@@ -3,6 +3,7 @@ import {
   MAX_COLUMNS,
   sessionNameError,
   VIEW_TYPE_LABELS,
+  ZOOM_STEPS,
   type ViewType
 } from '@shared/types'
 
@@ -77,7 +78,8 @@ interface ViewDialogProps {
   confirmLabel: string
   initialName?: string
   initialType?: ViewType
-  onSubmit(name: string, type: ViewType): void
+  initialZoom?: number
+  onSubmit(name: string, type: ViewType, zoom: number): void
   onClose(): void
 }
 
@@ -86,11 +88,13 @@ export function ViewDialog({
   confirmLabel,
   initialName = '',
   initialType = 'tabs-vertical',
+  initialZoom = 1,
   onSubmit,
   onClose
 }: ViewDialogProps): JSX.Element {
   const [name, setName] = useState(initialName)
   const [type, setType] = useState<ViewType>(initialType)
+  const [zoom, setZoom] = useState(initialZoom)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -101,7 +105,7 @@ export function ViewDialog({
   function submit(e: FormEvent): void {
     e.preventDefault()
     if (!name.trim()) return
-    onSubmit(name.trim(), type)
+    onSubmit(name.trim(), type, zoom)
   }
 
   return (
@@ -133,6 +137,26 @@ export function ViewDialog({
             ))}
           </div>
         </label>
+        <label>
+          Browser zoom
+          <div className="radio-row">
+            {ZOOM_STEPS.map((z) => (
+              <button
+                key={z}
+                type="button"
+                className={`radio-btn ${Math.abs(zoom - z) < 0.005 ? 'radio-active' : ''}`}
+                onClick={() => setZoom(z)}
+              >
+                {Math.round(z * 100)}%
+              </button>
+            ))}
+          </div>
+          <small>
+            Applies to every browser pane in this view. Chromium keeps zoom per site, so panes
+            showing the same site cannot differ. ⌘+ / ⌘− / ⌘0 adjust the active view.
+          </small>
+        </label>
+
         <div className="modal-actions">
           <span className="spacer" />
           <button type="button" onClick={onClose}>
