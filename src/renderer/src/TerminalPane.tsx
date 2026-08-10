@@ -13,6 +13,8 @@ interface Props {
   session: SessionInfo
   ssh: SshConfig
   active: boolean
+  /** Drop the ssh client while this tab is hidden, reattaching when it returns. */
+  detachWhenHidden: boolean
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
   onRename(): void
@@ -35,7 +37,7 @@ const THEME = {
 }
 
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { session, ssh, active, onOpenUrl, onRename },
+  { session, ssh, active, detachWhenHidden, onOpenUrl, onRename },
   ref
 ) {
   const id = session.name
@@ -43,6 +45,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const [status, setStatus] = useState<'idle' | 'attached' | 'detached'>('idle')
+  /** Set when we drop the client on purpose, so the exit is not reported as a drop. */
+  const backgroundDetach = useRef(false)
 
   // Keep the latest values reachable from the terminal, which is built once.
   const openUrlRef = useRef(onOpenUrl)
@@ -106,6 +110,14 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     })
     const offExit = window.rippon.pty.onExit((ptyId) => {
       if (ptyId !== id) return
+      if (backgroundDetach.current) {
+        // We asked for this. Clear the stale screen so the next attach starts
+        // from tmux's own redraw rather than on top of an old frame.
+        backgroundDetach.current = false
+        term.reset()
+        setStatus('idle')
+        return
+      }
       setStatus('detached')
       term.write('\r\n\x1b[2m— detached. Press Enter to reattach. —\x1b[0m\r\n')
     })
@@ -148,12 +160,21 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     return () => d.dispose()
   }, [status])
 
-  // Attach lazily, the first time the tab is shown.
+  // Attach lazily, the first time the tab is shown — and again on return if
+  // the previous hide dropped the client.
   useEffect(() => {
     if (status !== 'idle' || !active) return
     const t = setTimeout(attach, 0)
     return () => clearTimeout(t)
   }, [active, status])
+
+  // Optionally give the ssh channel back while the tab is hidden. tmux holds
+  // the session and its scrollback, so returning costs one redraw.
+  useEffect(() => {
+    if (!detachWhenHidden || active || status !== 'attached') return
+    backgroundDetach.current = true
+    void window.rippon.pty.kill(id)
+  }, [active, detachWhenHidden, status, id])
 
   useEffect(() => {
     if (!active) return

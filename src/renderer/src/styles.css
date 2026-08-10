@@ -561,6 +561,11 @@ body {
   border-color: var(--accent);
 }
 
+.checkbox-note {
+  margin: -8px 0 0 22px;
+  display: block;
+}
+
 .modal small {
   color: #6b7280;
   font-size: 11px;

@@ -23,6 +23,12 @@ export interface RipponConfig {
   hidden: string[]
   /** Width of the vertical tab rail, in px. */
   sidebarWidth: number
+  /**
+   * Detach a session's ssh client while its tab is hidden, reattaching on
+   * return. tmux keeps the session and its scrollback either way; this only
+   * trades local buffering for one ssh channel per background tab.
+   */
+  detachHidden: boolean
   sessions: Record<string, SessionConfig>
 }
 
@@ -45,6 +51,7 @@ export function defaultConfig(): RipponConfig {
     ssh: { host: '', args: [] },
     hidden: [],
     sidebarWidth: 210,
+    detachHidden: false,
     sessions: {}
   }
 }
@@ -105,6 +112,8 @@ export function normalizeConfig(raw: unknown): RipponConfig {
   if (typeof cfg.sidebarWidth === 'number' && Number.isFinite(cfg.sidebarWidth)) {
     out.sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(cfg.sidebarWidth)))
   }
+
+  out.detachHidden = cfg.detachHidden === true
 
   if (typeof cfg.activeSession === 'string') out.activeSession = cfg.activeSession
 

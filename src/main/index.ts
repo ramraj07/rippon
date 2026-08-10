@@ -118,7 +118,7 @@ function buildMenu(): void {
               { role: 'about' as const },
               { type: 'separator' as const },
               {
-                label: 'SSH Settings…',
+                label: 'Settings…',
                 accelerator: 'CmdOrCtrl+,',
                 click: () => send('menu:settings')
               },
@@ -151,7 +151,7 @@ function buildMenu(): void {
         { type: 'separator' },
         ...(isMac
           ? []
-          : [{ label: 'SSH Settings…', accelerator: 'Ctrl+,', click: () => send('menu:settings') }]),
+          : [{ label: 'Settings…', accelerator: 'Ctrl+,', click: () => send('menu:settings') }]),
         {
           label: 'Choose Config File…',
           accelerator: 'CmdOrCtrl+Shift+O',

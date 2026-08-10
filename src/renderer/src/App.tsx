@@ -223,10 +223,10 @@ export default function App(): JSX.Element {
     window.addEventListener('pointerup', up)
   }
 
-  const saveSsh = useCallback(
-    (ssh: SshConfig) => {
+  const saveSettings = useCallback(
+    (ssh: SshConfig, detachHidden: boolean) => {
       setDialog(null)
-      commit({ ...configRef.current, ssh })
+      commit({ ...configRef.current, ssh, detachHidden })
       void refresh()
     },
     [commit, refresh]
@@ -412,6 +412,7 @@ export default function App(): JSX.Element {
               session={s}
               ssh={config.ssh}
               active={s.name === activeName}
+              detachHidden={config.detachHidden}
               settings={config.sessions[s.name] ?? defaultSession()}
               terminals={terminals.current}
               browsers={browsers.current}
@@ -456,8 +457,9 @@ export default function App(): JSX.Element {
       {dialog?.kind === 'settings' ? (
         <SshSettings
           ssh={config.ssh}
+          detachHidden={config.detachHidden}
           configPath={configPath}
-          onSave={saveSsh}
+          onSave={saveSettings}
           onClose={() => setDialog(null)}
           onChoosePath={() => void window.rippon.config.choosePath()}
         />
@@ -500,6 +502,7 @@ interface TabPanelProps {
   session: SessionInfo
   ssh: SshConfig
   active: boolean
+  detachHidden: boolean
   settings: SessionConfig
   terminals: Map<string, TerminalHandle | null>
   browsers: Map<string, BrowserHandle | null>
@@ -511,6 +514,7 @@ function TabPanel({
   session,
   ssh,
   active,
+  detachHidden,
   settings,
   terminals,
   browsers,
@@ -556,6 +560,7 @@ function TabPanel({
           session={session}
           ssh={ssh}
           active={active}
+          detachWhenHidden={detachHidden}
           onOpenUrl={openUrl}
           onRename={onRename}
         />
