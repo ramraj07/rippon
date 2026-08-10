@@ -142,6 +142,11 @@ function buildMenu(): void {
           accelerator: 'CmdOrCtrl+T',
           click: () => send('menu:new-session')
         },
+        {
+          label: 'New View…',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => send('menu:new-view')
+        },
         { label: 'Close Tab…', accelerator: 'CmdOrCtrl+W', click: () => send('menu:close-tab') },
         {
           label: 'Refresh Session List',
@@ -200,6 +205,17 @@ function buildMenu(): void {
           label: 'Previous Tab',
           accelerator: 'Ctrl+Shift+Tab',
           click: () => send('menu:cycle-tab', -1)
+        },
+        { type: 'separator' },
+        {
+          label: 'Next View',
+          accelerator: 'CmdOrCtrl+Alt+Right',
+          click: () => send('menu:cycle-view', 1)
+        },
+        {
+          label: 'Previous View',
+          accelerator: 'CmdOrCtrl+Alt+Left',
+          click: () => send('menu:cycle-view', -1)
         },
         { type: 'separator' },
         ...tabItems

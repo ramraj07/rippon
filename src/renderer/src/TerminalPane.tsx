@@ -15,6 +15,8 @@ interface Props {
   active: boolean
   /** Drop the ssh client while this tab is hidden, reattaching when it returns. */
   detachWhenHidden: boolean
+  /** Steal keyboard focus when shown. Off in tiled views, where several panes appear at once. */
+  focusOnShow: boolean
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
   onRename(): void
@@ -37,7 +39,7 @@ const THEME = {
 }
 
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
-  { session, ssh, active, detachWhenHidden, onOpenUrl, onRename },
+  { session, ssh, active, detachWhenHidden, focusOnShow, onOpenUrl, onRename },
   ref
 ) {
   const id = session.name
@@ -188,10 +190,10 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       } catch {
         /* ignore */
       }
-      term.focus()
+      if (focusOnShow) term.focus()
     }, 0)
     return () => clearTimeout(t)
-  }, [active, id])
+  }, [active, id, focusOnShow])
 
   return (
     <div className="pane terminal-pane">

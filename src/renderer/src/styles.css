@@ -50,6 +50,185 @@ body {
   -webkit-app-region: drag;
 }
 
+/* ---------- views ---------- */
+
+.viewbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+
+.viewbar::-webkit-scrollbar {
+  display: none;
+}
+
+.view-chip {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.view-chip:hover {
+  background: #23272f;
+  color: var(--text);
+}
+
+.view-chip-active {
+  background: #303643;
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.view-add {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.view-add:hover {
+  background: #23272f;
+  color: var(--text);
+}
+
+/* ---------- horizontal tab strip ---------- */
+
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+.htab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #23272f;
+  color: var(--text-dim);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.htab:hover {
+  background: #2a2f38;
+}
+
+.htab-active {
+  background: #303643;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.htab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip-add {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.strip-add:hover {
+  background: #23272f;
+  color: var(--text);
+}
+
+/* ---------- tiled toolbar ---------- */
+
+.tilebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.tilebar-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.radio-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.radio-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.radio-btn:hover {
+  color: var(--text);
+}
+
+.radio-active {
+  background: #303643;
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.bar-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.bar-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.bar-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* ---------- vertical tab rail ---------- */
 
 .body-row {
@@ -227,8 +406,31 @@ body {
   font-size: 12px;
 }
 
+.ctx-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
 .ctx-menu button:hover {
   background: #333a46;
+}
+
+.ctx-check {
+  display: inline-block;
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--accent);
+}
+
+.ctx-danger {
+  color: var(--danger);
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
 }
 
 .menu-label {
@@ -287,16 +489,90 @@ body {
 
 /* ---------- panes ---------- */
 
-.tabs-body {
+.panes {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panes-stack {
   position: relative;
+}
+
+/* Stacked layouts overlay every pane; only the visible one is displayed. */
+.panes-stack .pane-slot {
+  position: absolute;
+  inset: 0;
+}
+
+.panes-grid {
+  overflow: auto;
+}
+
+.pane-slot {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-slot-tile {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pane-slot-focused {
+  border-color: var(--accent);
+}
+
+.split-row {
+  display: flex;
   flex: 1;
   min-height: 0;
 }
 
-.tab-panel {
-  position: absolute;
-  inset: 0;
-  flex-direction: row;
+.tile-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 26px;
+  height: 26px;
+  padding: 0 4px 0 6px;
+  background: #1f232a;
+  border-bottom: 1px solid var(--border);
+}
+
+.tile-select {
+  max-width: 100%;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.tile-select:hover {
+  border-color: var(--border);
+}
+
+.tile-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #16191f;
+}
+
+.tile-empty .tile-select {
+  border-color: var(--border);
+  color: var(--text-dim);
 }
 
 .split-left {

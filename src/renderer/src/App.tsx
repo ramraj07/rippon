@@ -4,45 +4,67 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type PointerEvent as ReactPointerEvent
 } from 'react'
 import TerminalPane, { type TerminalHandle } from './TerminalPane'
 import BrowserPane, { type BrowserHandle } from './BrowserPane'
 import SshSettings from './SshSettings'
-import { CloseSessionDialog, NameDialog } from './Dialogs'
 import {
-  defaultConfig,
+  CloseSessionDialog,
+  ColumnsDialog,
+  ContextMenu,
+  NameDialog,
+  ViewDialog,
+  type MenuItem
+} from './Dialogs'
+import {
   defaultSession,
+  defaultView,
+  MAX_COLUMNS,
+  MAX_TILES,
+  normalizeConfig,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
+  suggestColumns,
+  VIEW_TYPE_LABELS,
   type RipponConfig,
   type SessionConfig,
   type SessionInfo,
-  type SshConfig
+  type SshConfig,
+  type View,
+  type ViewType
 } from '@shared/types'
 
 const SAVE_DEBOUNCE_MS = 400
 const POLL_MS = 5000
-/** Roughly the rendered height of the tab context menu, used to keep it on screen. */
-const CTX_MENU_HEIGHT = 84
 
 type Dialog =
   | { kind: 'settings' }
-  | { kind: 'new' }
-  | { kind: 'rename'; name: string }
-  | { kind: 'close'; name: string }
+  | { kind: 'new-session' }
+  | { kind: 'rename-session'; name: string }
+  | { kind: 'close-session'; name: string }
+  | { kind: 'new-view' }
+  | { kind: 'edit-view'; id: string }
+  | { kind: 'fill-tiles' }
   | null
 
+type Ctx = { x: number; y: number; items: MenuItem[] } | null
+
+function makeViewId(): string {
+  return `view-${Math.random().toString(36).slice(2, 9)}`
+}
+
 export default function App(): JSX.Element {
-  const [config, setConfig] = useState<RipponConfig>(defaultConfig)
+  const [config, setConfig] = useState<RipponConfig>(() => normalizeConfig({}))
   const [configPath, setConfigPath] = useState('')
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [ready, setReady] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<Dialog>(null)
+  const [ctx, setCtx] = useState<Ctx>(null)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
-  const [ctxMenu, setCtxMenu] = useState<{ name: string; x: number; y: number } | null>(null)
 
   const terminals = useRef(new Map<string, TerminalHandle | null>())
   const browsers = useRef(new Map<string, BrowserHandle | null>())
@@ -51,16 +73,34 @@ export default function App(): JSX.Element {
   const configRef = useRef(config)
   configRef.current = config
 
-  const visible = useMemo(
-    () => sessions.filter((s) => !config.hidden.includes(s.name)),
-    [sessions, config.hidden]
+  const view = config.views.find((v) => v.id === config.activeViewId) ?? config.views[0]
+  const tiled = view.type === 'tiled'
+
+  /** Sessions this view shows in its tab strip / rail. */
+  const listed = useMemo(
+    () => sessions.filter((s) => !view.hidden.includes(s.name)),
+    [sessions, view.hidden]
   )
-  const activeName =
-    visible.find((s) => s.name === config.activeSession)?.name ?? visible[0]?.name ?? null
   const hiddenExisting = useMemo(
-    () => sessions.filter((s) => config.hidden.includes(s.name)),
-    [sessions, config.hidden]
+    () => sessions.filter((s) => view.hidden.includes(s.name)),
+    [sessions, view.hidden]
   )
+  const live = useMemo(() => new Set(sessions.map((s) => s.name)), [sessions])
+
+  const activeName = tiled
+    ? (view.activeSession && view.tiles.includes(view.activeSession) ? view.activeSession : null) ??
+      view.tiles.find((t): t is string => !!t && live.has(t)) ??
+      null
+    : listed.find((s) => s.name === view.activeSession)?.name ?? listed[0]?.name ?? null
+
+  /** Sessions rendered on screen right now, and so worth attaching. */
+  const onScreen = useMemo(() => {
+    if (tiled) return new Set(view.tiles.filter((t): t is string => !!t && live.has(t)))
+    return new Set(activeName ? [activeName] : [])
+  }, [tiled, view.tiles, live, activeName])
+
+  /** Which of the ⌘1–⌘9 slots maps to which session, per layout. */
+  const indexed = tiled ? view.tiles : listed.map((s) => s.name)
 
   /** Single write path: update local state now, persist to disk debounced. */
   const commit = useCallback((next: RipponConfig) => {
@@ -69,6 +109,19 @@ export default function App(): JSX.Element {
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => void window.rippon.config.save(next), SAVE_DEBOUNCE_MS)
   }, [])
+
+  /** Patch the active view. */
+  const updateView = useCallback(
+    (patch: Partial<View> | ((v: View) => Partial<View>)) => {
+      const cur = configRef.current
+      const id = cur.activeViewId
+      commit({
+        ...cur,
+        views: cur.views.map((v) => (v.id === id ? { ...v, ...(typeof patch === 'function' ? patch(v) : patch) } : v))
+      })
+    },
+    [commit]
+  )
 
   const refresh = useCallback(async () => {
     const ssh = configRef.current.ssh
@@ -85,19 +138,30 @@ export default function App(): JSX.Element {
     setListError(null)
     setSessions(res.value)
 
-    // Drop hidden entries whose session no longer exists remotely.
-    const live = new Set(res.value.map((s) => s.name))
+    // Drop references to sessions that no longer exist remotely.
+    const names = new Set(res.value.map((s) => s.name))
     const cur = configRef.current
-    const prunedHidden = cur.hidden.filter((h) => live.has(h))
-    if (prunedHidden.length !== cur.hidden.length) commit({ ...cur, hidden: prunedHidden })
+    let changed = false
+    const views = cur.views.map((v) => {
+      const hidden = v.hidden.filter((h) => names.has(h))
+      const tiles = v.tiles.map((t) => (t && names.has(t) ? t : null))
+      if (hidden.length !== v.hidden.length || tiles.some((t, i) => t !== v.tiles[i])) {
+        changed = true
+        return { ...v, hidden, tiles }
+      }
+      return v
+    })
+    if (changed) commit({ ...cur, views })
   }, [commit])
 
   const selectSession = useCallback(
     (name: string) => {
-      if (configRef.current.activeSession === name) return
-      commit({ ...configRef.current, activeSession: name })
+      if (configRef.current.views.find((v) => v.id === configRef.current.activeViewId)?.activeSession === name) {
+        return
+      }
+      updateView({ activeSession: name })
     },
-    [commit]
+    [updateView]
   )
 
   const updateSession = useCallback(
@@ -111,15 +175,17 @@ export default function App(): JSX.Element {
     [commit]
   )
 
-  /** Pick the tab to show after `name` leaves the strip. */
+  /** Pick what to show after `name` leaves the current view. */
   const neighbourOf = useCallback(
     (name: string): string | undefined => {
-      const idx = visible.findIndex((s) => s.name === name)
-      const rest = visible.filter((s) => s.name !== name)
+      const idx = listed.findIndex((s) => s.name === name)
+      const rest = listed.filter((s) => s.name !== name)
       return rest[Math.min(Math.max(idx, 0), rest.length - 1)]?.name
     },
-    [visible]
+    [listed]
   )
+
+  // ---------- session actions ----------
 
   const createSession = useCallback(
     async (name: string) => {
@@ -132,26 +198,38 @@ export default function App(): JSX.Element {
       const cur = configRef.current
       commit({
         ...cur,
-        hidden: cur.hidden.filter((h) => h !== name),
-        activeSession: name,
-        sessions: { ...cur.sessions, [name]: cur.sessions[name] ?? defaultSession() }
+        sessions: { ...cur.sessions, [name]: cur.sessions[name] ?? defaultSession() },
+        views: cur.views.map((v) => {
+          if (v.id !== cur.activeViewId) return v
+          const hidden = v.hidden.filter((h) => h !== name)
+          if (v.type !== 'tiled') return { ...v, hidden, activeSession: name }
+          // Drop it into the first free tile, adding one if the grid is full.
+          const slot = v.tiles.findIndex((t) => t === null)
+          const tiles =
+            slot === -1
+              ? v.tiles.length < MAX_TILES
+                ? [...v.tiles, name]
+                : v.tiles
+              : v.tiles.map((t, i) => (i === slot ? name : t))
+          return { ...v, hidden, tiles, activeSession: name }
+        })
       })
       await refresh()
     },
     [commit, refresh]
   )
 
+  /** Remove from this view only; the session keeps running. */
   const hideSession = useCallback(
     (name: string) => {
       setDialog(null)
-      const cur = configRef.current
-      commit({
-        ...cur,
-        hidden: [...new Set([...cur.hidden, name])],
-        activeSession: neighbourOf(name)
-      })
+      updateView((v) =>
+        v.type === 'tiled'
+          ? { tiles: v.tiles.map((t) => (t === name ? null : t)) }
+          : { hidden: [...new Set([...v.hidden, name])], activeSession: neighbourOf(name) }
+      )
     },
-    [commit, neighbourOf]
+    [neighbourOf, updateView]
   )
 
   const killSession = useCallback(
@@ -164,12 +242,16 @@ export default function App(): JSX.Element {
         return
       }
       const cur = configRef.current
-      const { [name]: _removed, ...rest } = cur.sessions
+      const { [name]: _gone, ...rest } = cur.sessions
       commit({
         ...cur,
         sessions: rest,
-        hidden: cur.hidden.filter((h) => h !== name),
-        activeSession: next
+        views: cur.views.map((v) => ({
+          ...v,
+          hidden: v.hidden.filter((h) => h !== name),
+          tiles: v.tiles.map((t) => (t === name ? null : t)),
+          activeSession: v.activeSession === name ? (v.id === cur.activeViewId ? next : undefined) : v.activeSession
+        }))
       })
       await refresh()
     },
@@ -190,8 +272,12 @@ export default function App(): JSX.Element {
       commit({
         ...cur,
         sessions: { ...rest, [to]: moved ?? defaultSession() },
-        hidden: cur.hidden.map((h) => (h === from ? to : h)),
-        activeSession: cur.activeSession === from ? to : cur.activeSession
+        views: cur.views.map((v) => ({
+          ...v,
+          hidden: v.hidden.map((h) => (h === from ? to : h)),
+          tiles: v.tiles.map((t) => (t === from ? to : t)),
+          activeSession: v.activeSession === from ? to : v.activeSession
+        }))
       })
       await refresh()
     },
@@ -200,10 +286,93 @@ export default function App(): JSX.Element {
 
   const restoreSession = useCallback(
     (name: string) => {
-      const cur = configRef.current
-      commit({ ...cur, hidden: cur.hidden.filter((h) => h !== name), activeSession: name })
+      updateView((v) => ({ hidden: v.hidden.filter((h) => h !== name), activeSession: name }))
+    },
+    [updateView]
+  )
+
+  // ---------- view actions ----------
+
+  const selectView = useCallback(
+    (id: string) => {
+      if (configRef.current.activeViewId === id) return
+      commit({ ...configRef.current, activeViewId: id })
     },
     [commit]
+  )
+
+  const addView = useCallback(
+    (name: string, type: ViewType) => {
+      setDialog(null)
+      const cur = configRef.current
+      const id = makeViewId()
+      // A fresh tiled view starts with a grid sized to what is running.
+      const names = sessions.map((s) => s.name)
+      const v = defaultView(id, {
+        name,
+        type,
+        columns: suggestColumns(names.length),
+        tiles: type === 'tiled' ? names.slice(0, MAX_TILES) : []
+      })
+      commit({ ...cur, views: [...cur.views, v], activeViewId: id })
+    },
+    [commit, sessions]
+  )
+
+  const editView = useCallback(
+    (id: string, name: string, type: ViewType) => {
+      setDialog(null)
+      const cur = configRef.current
+      commit({
+        ...cur,
+        views: cur.views.map((v) => {
+          if (v.id !== id) return v
+          // Switching into an empty grid, seed it rather than showing nothing.
+          const tiles =
+            type === 'tiled' && v.tiles.every((t) => t === null)
+              ? sessions.filter((s) => !v.hidden.includes(s.name)).map((s) => s.name).slice(0, MAX_TILES)
+              : v.tiles
+          const columns = type === 'tiled' && !v.tiles.length ? suggestColumns(tiles.length) : v.columns
+          return { ...v, name, type, tiles, columns }
+        })
+      })
+    },
+    [commit, sessions]
+  )
+
+  const deleteView = useCallback(
+    (id: string) => {
+      const cur = configRef.current
+      if (cur.views.length < 2) return
+      const idx = cur.views.findIndex((v) => v.id === id)
+      const views = cur.views.filter((v) => v.id !== id)
+      commit({
+        ...cur,
+        views,
+        activeViewId:
+          cur.activeViewId === id ? views[Math.min(idx, views.length - 1)].id : cur.activeViewId
+      })
+    },
+    [commit]
+  )
+
+  const assignTile = useCallback(
+    (index: number, name: string | null) => {
+      // Keep it one session per tile, so moving a session clears its old slot.
+      updateView((v) => ({
+        tiles: v.tiles.map((t, i) => (i === index ? name : t === name ? null : t)),
+        activeSession: name ?? v.activeSession
+      }))
+    },
+    [updateView]
+  )
+
+  const fillTiles = useCallback(
+    (columns: number) => {
+      setDialog(null)
+      updateView({ columns, tiles: sessions.map((s) => s.name).slice(0, MAX_TILES) })
+    },
+    [sessions, updateView]
   )
 
   function startSidebarDrag(e: ReactPointerEvent<HTMLDivElement>): void {
@@ -215,7 +384,7 @@ export default function App(): JSX.Element {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       setDragWidth((final) => {
-        if (final !== null) commit({ ...configRef.current, sidebarWidth: final })
+        if (final !== null) updateView({ sidebarWidth: final })
         return null
       })
     }
@@ -232,7 +401,64 @@ export default function App(): JSX.Element {
     [commit, refresh]
   )
 
-  // Initial load, plus external config changes (another machine syncing the file in).
+  // ---------- menus ----------
+
+  const sessionMenu = useCallback(
+    (name: string, x: number, y: number) => {
+      setCtx({
+        x,
+        y,
+        items: [
+          { label: 'Rename session…', onClick: () => setDialog({ kind: 'rename-session', name }) },
+          {
+            label: tiled ? 'Clear tile' : 'Close tab…',
+            onClick: () =>
+              tiled ? hideSession(name) : setDialog({ kind: 'close-session', name })
+          },
+          {
+            label: 'Kill session…',
+            danger: true,
+            separator: true,
+            onClick: () => setDialog({ kind: 'close-session', name })
+          }
+        ]
+      })
+    },
+    [hideSession, tiled]
+  )
+
+  const viewMenu = useCallback(
+    (v: View, x: number, y: number) => {
+      const cur = configRef.current
+      setCtx({
+        x,
+        y,
+        items: [
+          { label: 'Rename view…', onClick: () => setDialog({ kind: 'edit-view', id: v.id }) },
+          ...(Object.keys(VIEW_TYPE_LABELS) as ViewType[]).map((t, i) => ({
+            label: VIEW_TYPE_LABELS[t],
+            checked: v.type === t,
+            separator: i === 0,
+            onClick: () => editView(v.id, v.name, t)
+          })),
+          ...(cur.views.length > 1
+            ? [
+                {
+                  label: 'Delete view',
+                  danger: true,
+                  separator: true,
+                  onClick: () => deleteView(v.id)
+                }
+              ]
+            : [])
+        ]
+      })
+    },
+    [deleteView, editView]
+  )
+
+  // ---------- effects ----------
+
   useEffect(() => {
     void window.rippon.config.get().then(({ config: cfg, path }) => {
       configRef.current = cfg
@@ -256,7 +482,7 @@ export default function App(): JSX.Element {
     }
   }, [refresh])
 
-  // Keep the tab strip in step with the remote session list.
+  // Keep the session list in step with the host.
   useEffect(() => {
     const timer = setInterval(() => void refresh(), POLL_MS)
     const onFocus = (): void => void refresh()
@@ -267,28 +493,37 @@ export default function App(): JSX.Element {
     }
   }, [refresh])
 
-  // Menu commands.
   useEffect(() => {
     return window.rippon.onMenu((action, payload) => {
       const name = activeName
       switch (action) {
         case 'menu:new-session':
-          return setDialog({ kind: 'new' })
+          return setDialog({ kind: 'new-session' })
+        case 'menu:new-view':
+          return setDialog({ kind: 'new-view' })
         case 'menu:settings':
           return setDialog({ kind: 'settings' })
         case 'menu:refresh':
           return void refresh()
         case 'menu:close-tab':
-          return name ? setDialog({ kind: 'close', name }) : undefined
-        case 'menu:cycle-tab': {
-          if (visible.length < 2 || !name) return
-          const idx = visible.findIndex((s) => s.name === name)
+          return name ? setDialog({ kind: 'close-session', name }) : undefined
+        case 'menu:cycle-view': {
+          const cur = configRef.current
+          if (cur.views.length < 2) return
+          const i = cur.views.findIndex((v) => v.id === cur.activeViewId)
           const delta = typeof payload === 'number' ? payload : 1
-          return selectSession(visible[(idx + delta + visible.length) % visible.length].name)
+          return selectView(cur.views[(i + delta + cur.views.length) % cur.views.length].id)
+        }
+        case 'menu:cycle-tab': {
+          const names = indexed.filter((n): n is string => !!n)
+          if (names.length < 2 || !name) return
+          const i = names.indexOf(name)
+          const delta = typeof payload === 'number' ? payload : 1
+          return selectSession(names[(i + delta + names.length) % names.length])
         }
         case 'menu:select-tab-index': {
-          const s = visible[typeof payload === 'number' ? payload : 0]
-          return s ? selectSession(s.name) : undefined
+          const n = indexed[typeof payload === 'number' ? payload : 0]
+          return n ? selectSession(n) : undefined
         }
         case 'menu:focus-address':
           return name ? browsers.current.get(name)?.focusAddress() : undefined
@@ -300,11 +535,53 @@ export default function App(): JSX.Element {
           return name ? terminals.current.get(name)?.reattach() : undefined
       }
     })
-  }, [activeName, refresh, selectSession, visible])
+  }, [activeName, indexed, refresh, selectSession, selectView])
+
+  // ---------- render ----------
+
+  const rows = Math.max(1, Math.ceil(view.tiles.length / view.columns))
+  const paneLayerStyle: CSSProperties = tiled
+    ? {
+        display: 'grid',
+        gridTemplateColumns: `repeat(${view.columns}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        gap: 4,
+        padding: 4
+      }
+    : {}
+
+  function tilePosition(index: number): CSSProperties {
+    return {
+      gridColumn: (index % view.columns) + 1,
+      gridRow: Math.floor(index / view.columns) + 1
+    }
+  }
+
+  const editingView = dialog?.kind === 'edit-view' ? config.views.find((v) => v.id === dialog.id) : null
 
   return (
     <div className="app">
       <header className="titlebar">
+        <div className="viewbar">
+          {config.views.map((v) => (
+            <button
+              key={v.id}
+              className={`view-chip ${v.id === view.id ? 'view-chip-active' : ''}`}
+              title={`${v.name} — ${VIEW_TYPE_LABELS[v.type]}\nRight-click for layout and rename`}
+              onClick={() => selectView(v.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                viewMenu(v, e.clientX, e.clientY)
+              }}
+            >
+              {v.name}
+            </button>
+          ))}
+          <button className="view-add" title="New view" onClick={() => setDialog({ kind: 'new-view' })}>
+            ＋
+          </button>
+        </div>
+        <span className="spacer" />
         <button
           className="host-btn"
           title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
@@ -312,7 +589,6 @@ export default function App(): JSX.Element {
         >
           {config.ssh.host || 'set up SSH…'} ⚙
         </button>
-        <span className="spacer" />
       </header>
 
       {listError ? (
@@ -323,74 +599,153 @@ export default function App(): JSX.Element {
         </div>
       ) : null}
 
-      <div className="body-row">
-        <nav className="sidebar" style={{ width: dragWidth ?? config.sidebarWidth }}>
-          <div className="sidebar-list">
-            {visible.map((s) => (
-              <div
-                key={s.name}
-                className={`vtab ${s.name === activeName ? 'vtab-active' : ''}`}
-                onClick={() => selectSession(s.name)}
-                onDoubleClick={() => setDialog({ kind: 'rename', name: s.name })}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  // Keep the menu on screen when right-clicking near the bottom.
-                  setCtxMenu({
-                    name: s.name,
-                    x: e.clientX,
-                    y: Math.min(e.clientY, window.innerHeight - CTX_MENU_HEIGHT)
-                  })
+      {view.type === 'tabs-horizontal' ? (
+        <div className="tabstrip">
+          {listed.map((s) => (
+            <div
+              key={s.name}
+              className={`htab ${s.name === activeName ? 'htab-active' : ''}`}
+              onClick={() => selectSession(s.name)}
+              onDoubleClick={() => setDialog({ kind: 'rename-session', name: s.name })}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                sessionMenu(s.name, e.clientX, e.clientY)
+              }}
+              title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}`}
+            >
+              <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
+              <span className="htab-title">{s.name}</span>
+              <button
+                className="tab-close"
+                title="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDialog({ kind: 'close-session', name: s.name })
                 }}
-                title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click or right-click to rename`}
               >
-                <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
-                <span className="vtab-text">
-                  <span className="vtab-name">{s.name}</span>
-                  <span className="vtab-meta">
-                    {s.windows} window{s.windows === 1 ? '' : 's'}
-                    {s.attached ? ' · attached' : ''}
-                  </span>
-                </span>
-                <button
-                  className="tab-close"
-                  title="Close tab"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDialog({ kind: 'close', name: s.name })
-                  }}
-                >
-                  ×
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            className="strip-add"
+            title="New session"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              setCtx({
+                x: r.left,
+                y: r.bottom + 4,
+                items: [
+                  { label: 'New session…', onClick: () => setDialog({ kind: 'new-session' }) },
+                  ...hiddenExisting.map((s, i) => ({
+                    label: s.name,
+                    separator: i === 0,
+                    onClick: () => restoreSession(s.name)
+                  }))
+                ]
+              })
+            }}
+          >
+            ＋
+          </button>
+        </div>
+      ) : null}
+
+      {tiled ? (
+        <div className="tilebar">
+          <span className="tilebar-label">Columns</span>
+          {Array.from({ length: MAX_COLUMNS }, (_, i) => i + 1).map((n) => (
+            <button
+              key={n}
+              className={`radio-btn ${view.columns === n ? 'radio-active' : ''}`}
+              onClick={() => updateView({ columns: n })}
+            >
+              {n}
+            </button>
+          ))}
+          <span className="spacer" />
+          <button className="bar-btn" onClick={() => setDialog({ kind: 'fill-tiles' })}>
+            Tile all sessions…
+          </button>
+          <button
+            className="bar-btn"
+            disabled={view.tiles.length >= MAX_TILES}
+            onClick={() => updateView((v) => ({ tiles: [...v.tiles, null] }))}
+          >
+            + Tile
+          </button>
+          <button className="bar-btn" onClick={() => setDialog({ kind: 'new-session' })}>
+            + New session
+          </button>
+        </div>
+      ) : null}
+
+      <div className="body-row">
+        {view.type === 'tabs-vertical' ? (
+          <>
+            <nav className="sidebar" style={{ width: dragWidth ?? view.sidebarWidth }}>
+              <div className="sidebar-list">
+                {listed.map((s) => (
+                  <div
+                    key={s.name}
+                    className={`vtab ${s.name === activeName ? 'vtab-active' : ''}`}
+                    onClick={() => selectSession(s.name)}
+                    onDoubleClick={() => setDialog({ kind: 'rename-session', name: s.name })}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      sessionMenu(s.name, e.clientX, e.clientY)
+                    }}
+                    title={`${s.name} — ${s.windows} window(s)${s.attached ? ', attached' : ''}\nDouble-click or right-click to rename`}
+                  >
+                    <span className={`dot ${s.attached ? 'dot-attached' : ''}`} />
+                    <span className="vtab-text">
+                      <span className="vtab-name">{s.name}</span>
+                      <span className="vtab-meta">
+                        {s.windows} window{s.windows === 1 ? '' : 's'}
+                        {s.attached ? ' · attached' : ''}
+                      </span>
+                    </span>
+                    <button
+                      className="tab-close"
+                      title="Close tab"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDialog({ kind: 'close-session', name: s.name })
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="sidebar-footer">
+                {hiddenExisting.length ? (
+                  <>
+                    <div className="menu-label">Running, not shown</div>
+                    {hiddenExisting.map((s) => (
+                      <button
+                        key={s.name}
+                        className="hidden-item"
+                        title="Show this session again"
+                        onClick={() => restoreSession(s.name)}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+                <button className="new-session-btn" onClick={() => setDialog({ kind: 'new-session' })}>
+                  + New session
                 </button>
               </div>
-            ))}
-          </div>
+            </nav>
+            <div className="sidebar-resizer" onPointerDown={startSidebarDrag} />
+          </>
+        ) : null}
 
-          <div className="sidebar-footer">
-            {hiddenExisting.length ? (
-              <>
-                <div className="menu-label">Running, not shown</div>
-                {hiddenExisting.map((s) => (
-                  <button
-                    key={s.name}
-                    className="hidden-item"
-                    title="Show this session again"
-                    onClick={() => restoreSession(s.name)}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              </>
-            ) : null}
-            <button className="new-session-btn" onClick={() => setDialog({ kind: 'new' })}>
-              + New session
-            </button>
-          </div>
-        </nav>
-
-        <div className="sidebar-resizer" onPointerDown={startSidebarDrag} />
-
-        <main className="tabs-body">
-          {ready && visible.length === 0 ? (
+        <main className={`panes ${tiled ? 'panes-grid' : 'panes-stack'}`} style={paneLayerStyle}>
+          {ready && !sessions.length ? (
             <div className="empty">
               {!config.ssh.host ? (
                 <>
@@ -400,59 +755,79 @@ export default function App(): JSX.Element {
               ) : (
                 <>
                   No tmux sessions on {config.ssh.host}.
-                  <button onClick={() => setDialog({ kind: 'new' })}>Create one</button>
+                  <button onClick={() => setDialog({ kind: 'new-session' })}>Create one</button>
                 </>
               )}
             </div>
           ) : null}
 
-          {visible.map((s) => (
-            <TabPanel
-              key={s.name}
-              session={s}
-              ssh={config.ssh}
-              active={s.name === activeName}
-              detachHidden={config.detachHidden}
-              settings={config.sessions[s.name] ?? defaultSession()}
-              terminals={terminals.current}
-              browsers={browsers.current}
-              onUpdate={updateSession}
-              onRename={() => setDialog({ kind: 'rename', name: s.name })}
-            />
-          ))}
+          {/*
+            Every live session keeps one pane, mounted here for the life of the
+            session. Views only move it and show or hide it, so switching view
+            never tears down a terminal or reloads a browser.
+          */}
+          {sessions.map((s) => {
+            const tileIndex = tiled ? view.tiles.indexOf(s.name) : -1
+            const visible = onScreen.has(s.name)
+            return (
+              <SessionPane
+                key={s.name}
+                session={s}
+                ssh={config.ssh}
+                visible={visible}
+                focusOnShow={!tiled}
+                detachHidden={config.detachHidden}
+                settings={config.sessions[s.name] ?? defaultSession()}
+                terminals={terminals.current}
+                browsers={browsers.current}
+                style={tiled && tileIndex >= 0 ? tilePosition(tileIndex) : undefined}
+                focused={tiled && s.name === activeName}
+                tile={
+                  tiled && tileIndex >= 0
+                    ? {
+                        options: sessions.map((o) => o.name),
+                        onAssign: (n) => assignTile(tileIndex, n)
+                      }
+                    : undefined
+                }
+                onSelect={() => selectSession(s.name)}
+                onUpdate={updateSession}
+                onRename={() => setDialog({ kind: 'rename-session', name: s.name })}
+                onContextMenu={(x, y) => sessionMenu(s.name, x, y)}
+              />
+            )
+          })}
+
+          {tiled
+            ? view.tiles.map((t, i) =>
+                t && live.has(t) ? null : (
+                  <div key={`empty-${i}`} className="tile-empty" style={tilePosition(i)}>
+                    <select
+                      className="tile-select"
+                      value=""
+                      onChange={(e) => assignTile(i, e.target.value || null)}
+                    >
+                      <option value="">Empty tile — choose a session</option>
+                      {sessions.map((s) => (
+                        <option key={s.name} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="bar-btn"
+                      onClick={() => updateView((v) => ({ tiles: v.tiles.filter((_, j) => j !== i) }))}
+                    >
+                      Remove tile
+                    </button>
+                  </div>
+                )
+              )
+            : null}
         </main>
       </div>
 
-      {ctxMenu ? (
-        <>
-          <div
-            className="menu-scrim"
-            onMouseDown={() => setCtxMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setCtxMenu(null)
-            }}
-          />
-          <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-            <button
-              onClick={() => {
-                setDialog({ kind: 'rename', name: ctxMenu.name })
-                setCtxMenu(null)
-              }}
-            >
-              Rename session…
-            </button>
-            <button
-              onClick={() => {
-                setDialog({ kind: 'close', name: ctxMenu.name })
-                setCtxMenu(null)
-              }}
-            >
-              Close tab…
-            </button>
-          </div>
-        </>
-      ) : null}
+      {ctx ? <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} /> : null}
 
       {dialog?.kind === 'settings' ? (
         <SshSettings
@@ -465,7 +840,7 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
-      {dialog?.kind === 'new' ? (
+      {dialog?.kind === 'new-session' ? (
         <NameDialog
           title="New tmux session"
           confirmLabel="Create"
@@ -475,7 +850,7 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
-      {dialog?.kind === 'rename' ? (
+      {dialog?.kind === 'rename-session' ? (
         <NameDialog
           title="Rename session"
           confirmLabel="Rename"
@@ -486,11 +861,42 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
-      {dialog?.kind === 'close' ? (
+      {dialog?.kind === 'close-session' ? (
         <CloseSessionDialog
           name={dialog.name}
+          tiled={tiled}
           onHide={() => hideSession(dialog.name)}
           onKill={() => void killSession(dialog.name)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'new-view' ? (
+        <ViewDialog
+          title="New view"
+          confirmLabel="Create"
+          initialName={`View ${config.views.length + 1}`}
+          onSubmit={addView}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {editingView ? (
+        <ViewDialog
+          title="Edit view"
+          confirmLabel="Save"
+          initialName={editingView.name}
+          initialType={editingView.type}
+          onSubmit={(name, type) => editView(editingView.id, name, type)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'fill-tiles' ? (
+        <ColumnsDialog
+          count={sessions.length}
+          suggestion={suggestColumns(sessions.length)}
+          onSubmit={fillTiles}
           onClose={() => setDialog(null)}
         />
       ) : null}
@@ -498,36 +904,48 @@ export default function App(): JSX.Element {
   )
 }
 
-interface TabPanelProps {
+interface SessionPaneProps {
   session: SessionInfo
   ssh: SshConfig
-  active: boolean
+  visible: boolean
+  focusOnShow: boolean
+  focused: boolean
   detachHidden: boolean
   settings: SessionConfig
   terminals: Map<string, TerminalHandle | null>
   browsers: Map<string, BrowserHandle | null>
+  style?: CSSProperties
+  tile?: { options: string[]; onAssign(name: string | null): void }
+  onSelect(): void
   onUpdate(name: string, patch: Partial<SessionConfig>): void
   onRename(): void
+  onContextMenu(x: number, y: number): void
 }
 
-function TabPanel({
+function SessionPane({
   session,
   ssh,
-  active,
+  visible,
+  focusOnShow,
+  focused,
   detachHidden,
   settings,
   terminals,
   browsers,
+  style,
+  tile,
+  onSelect,
   onUpdate,
-  onRename
-}: TabPanelProps): JSX.Element {
-  const containerRef = useRef<HTMLDivElement>(null)
+  onRename,
+  onContextMenu
+}: SessionPaneProps): JSX.Element {
+  const splitRef = useRef<HTMLDivElement>(null)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const ratio = dragRatio ?? settings.splitRatio
   const name = session.name
 
   function startDrag(e: ReactPointerEvent<HTMLDivElement>): void {
-    const container = containerRef.current
+    const container = splitRef.current
     if (!container) return
     e.currentTarget.setPointerCapture(e.pointerId)
 
@@ -551,30 +969,64 @@ function TabPanel({
   const openUrl = useCallback((url: string) => browsers.get(name)?.navigate(url), [browsers, name])
 
   return (
-    <div ref={containerRef} className="tab-panel" style={{ display: active ? 'flex' : 'none' }}>
-      <div className="split-left" style={{ width: `calc(${ratio * 100}% - 3px)` }}>
-        <TerminalPane
-          ref={(h) => {
-            terminals.set(name, h)
-          }}
-          session={session}
-          ssh={ssh}
-          active={active}
-          detachWhenHidden={detachHidden}
-          onOpenUrl={openUrl}
-          onRename={onRename}
-        />
-      </div>
-      <div className="splitter" onPointerDown={startDrag} />
-      <div className="split-right">
-        <BrowserPane
-          ref={(h) => {
-            browsers.set(name, h)
-          }}
-          url={settings.url}
-          active={active}
-          onUrlChange={onUrlChange}
-        />
+    <div
+      className={`pane-slot ${tile ? 'pane-slot-tile' : ''} ${focused ? 'pane-slot-focused' : ''}`}
+      style={{ ...style, display: visible ? 'flex' : 'none' }}
+      onMouseDown={onSelect}
+    >
+      {tile ? (
+        <div className="tile-header">
+          <select
+            className="tile-select"
+            value={name}
+            onChange={(e) => tile.onAssign(e.target.value || null)}
+          >
+            {tile.options.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+          <span className="spacer" />
+          <button
+            className="icon-btn"
+            title="Tile actions"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              onContextMenu(r.left, r.bottom + 4)
+            }}
+          >
+            ⋯
+          </button>
+        </div>
+      ) : null}
+
+      <div className="split-row" ref={splitRef}>
+        <div className="split-left" style={{ width: `calc(${ratio * 100}% - 3px)` }}>
+          <TerminalPane
+            ref={(h) => {
+              terminals.set(name, h)
+            }}
+            session={session}
+            ssh={ssh}
+            active={visible}
+            focusOnShow={focusOnShow}
+            detachWhenHidden={detachHidden}
+            onOpenUrl={openUrl}
+            onRename={onRename}
+          />
+        </div>
+        <div className="splitter" onPointerDown={startDrag} />
+        <div className="split-right">
+          <BrowserPane
+            ref={(h) => {
+              browsers.set(name, h)
+            }}
+            url={settings.url}
+            active={visible}
+            onUrlChange={onUrlChange}
+          />
+        </div>
       </div>
     </div>
   )

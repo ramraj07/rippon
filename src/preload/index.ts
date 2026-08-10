@@ -40,6 +40,8 @@ const api = {
   onMenu: (cb: (action: string, payload?: unknown) => void): (() => void) => {
     const channels = [
       'menu:new-session',
+      'menu:new-view',
+      'menu:cycle-view',
       'menu:close-tab',
       'menu:refresh',
       'menu:settings',
