@@ -24,6 +24,27 @@ npm run build && npm start   # production bundle
 
 First launch opens SSH settings. Fill in the host and any flags, and the tab strip populates.
 
+## Building an app
+
+```bash
+npm run dist        # → release/Rippon-<version>-arm64.dmg and .zip
+npm run dist:dir    # unpacked release/mac-arm64/Rippon.app, for a quick check
+```
+
+Targets Apple Silicon. `node-pty` is native, so it is unpacked from the asar
+archive; everything else is bundled.
+
+The build is **unsigned** — signing needs a paid Developer ID. On this machine it
+just opens. On another Mac, Gatekeeper will refuse it once; clear the quarantine
+flag after copying:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Rippon.app
+```
+
+Packaged and dev runs share one profile (`~/Library/Application Support/rippon`),
+so a browser login done in either applies to both.
+
 ## Tabs = tmux sessions
 
 | Action | What happens remotely |

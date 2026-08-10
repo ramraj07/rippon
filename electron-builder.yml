@@ -1,0 +1,37 @@
+appId: com.rippon.app
+productName: Rippon
+copyright: Ramraj Velmurugan
+
+directories:
+  output: release
+  buildResources: build
+
+# The renderer and both node bundles are built by electron-vite into out/.
+files:
+  - out/**
+  - package.json
+
+# node-pty is a native module and has to stay a real file on disk — it cannot be
+# loaded from inside the asar archive.
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  # Unsigned: this is a personal build, and signing needs a paid Developer ID.
+  # See the README for the one-time Gatekeeper step on a new machine.
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target: nsis
+linux:
+  target: AppImage
+  category: Development

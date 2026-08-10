@@ -16,6 +16,14 @@ import { PtyManager } from './pty'
 import { createSession, killSession, listSessions, renameSession } from './tmux'
 import type { BrowserState, RipponConfig, SessionInfo, SshConfig } from '../shared/types'
 
+/*
+ * Pin the profile directory. A packaged build takes its name from productName
+ * ("Rippon") while a dev run takes it from package.json ("rippon"), so the two
+ * would keep separate cookie jars — every browser login would have to be done
+ * twice. Must run before ready.
+ */
+app.setPath('userData', path.join(app.getPath('appData'), 'rippon'))
+
 const configStore = new ConfigStore()
 const ptys = new PtyManager()
 const browsers = new BrowserViews()
