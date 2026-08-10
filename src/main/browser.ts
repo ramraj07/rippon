@@ -5,14 +5,11 @@ import type { BrowserState } from '../shared/types'
 /** Every browser pane shares this session, so a GitHub login in one is a login in all. */
 export const BROWSER_PARTITION = 'persist:rippon-browser'
 
-/**
- * A tile in a busy grid can be 200px wide. Sites are not built for that: their
- * narrowest breakpoints are the least tested paths, and at least one — GitHub's
- * PR inbox — spins its renderer at 100% CPU indefinitely there. Scale the page
- * down instead so the guest always lays out at a width sites actually support.
+/*
+ * No per-pane zoom: Chromium stores the zoom level per origin on the session,
+ * and every pane shares one session so a login is shared. Scaling one pane
+ * therefore scales every other pane on the same site.
  */
-const TARGET_VIEWPORT_WIDTH = 760
-const MIN_ZOOM = 0.34
 
 /**
  * Browser panes are WebContentsViews owned by the main process, with bounds
@@ -28,7 +25,6 @@ export class BrowserViews extends EventEmitter {
   private window: BrowserWindow | null = null
   private lastLogged = new Map<string, string>()
   private lastBounds = new Map<string, Rectangle>()
-  private lastZoom = new Map<string, number>()
   private hung = new Set<string>()
 
   attach(win: BrowserWindow): void {
@@ -104,6 +100,8 @@ export class BrowserViews extends EventEmitter {
 
     void wc.loadURL(url).then(
       () => {
+        // Clears any zoom a previous build persisted onto this origin.
+        wc.setZoomFactor(1)
         if (process.env['RIPPON_TRACE']) {
           console.log(`[view] ${id} guest renderer os pid = ${wc.getOSProcessId()}`)
         }
@@ -152,12 +150,6 @@ export class BrowserViews extends EventEmitter {
     ) {
       this.lastBounds.set(id, next)
       view.setBounds(next)
-
-      const zoom = Math.min(1, Math.max(MIN_ZOOM, next.width / TARGET_VIEWPORT_WIDTH))
-      if (Math.abs(zoom - (this.lastZoom.get(id) ?? 1)) > 0.01) {
-        this.lastZoom.set(id, zoom)
-        if (!view.webContents.isDestroyed()) view.webContents.setZoomFactor(zoom)
-      }
     }
     view.setVisible(true)
   }
@@ -197,7 +189,6 @@ export class BrowserViews extends EventEmitter {
     if (!view) return
     this.views.delete(id)
     this.lastBounds.delete(id)
-    this.lastZoom.delete(id)
     this.lastLogged.delete(id)
     this.hung.delete(id)
     this.window?.contentView.removeChildView(view)
