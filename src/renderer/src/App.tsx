@@ -564,6 +564,8 @@ export default function App(): JSX.Element {
   }
 
   const editingView = dialog?.kind === 'edit-view' ? config.views.find((v) => v.id === dialog.id) : null
+  // Browser views are native and paint over the page, so they hide behind any overlay.
+  const overlayOpen = dialog !== null || ctx !== null
 
   return (
     <div className="app">
@@ -775,6 +777,7 @@ export default function App(): JSX.Element {
                 session={s}
                 ssh={config.ssh}
                 visible={visible}
+                suppressed={overlayOpen}
                 focusOnShow={!tiled}
                 detachHidden={config.detachHidden}
                 settings={config.sessions[s.name] ?? defaultSession()}
@@ -908,6 +911,8 @@ interface SessionPaneProps {
   session: SessionInfo
   ssh: SshConfig
   visible: boolean
+  /** Something is overlaying the app, so main-process browser views must hide. */
+  suppressed: boolean
   focusOnShow: boolean
   focused: boolean
   detachHidden: boolean
@@ -926,6 +931,7 @@ function SessionPane({
   session,
   ssh,
   visible,
+  suppressed,
   focusOnShow,
   focused,
   detachHidden,
@@ -1038,8 +1044,10 @@ function SessionPane({
                 ref={(h) => {
                   browsers.set(name, h)
                 }}
+                id={name}
                 url={settings.url}
                 active={visible}
+                suppressed={suppressed}
                 onUrlChange={onUrlChange}
                 onClose={() => onUpdate(name, { showBrowser: false })}
               />

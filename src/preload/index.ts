@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { RipponConfig, SessionInfo, SshConfig } from '../shared/types'
+import type { BrowserState, RipponConfig, SessionInfo, SshConfig } from '../shared/types'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
+export interface Bounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]): void => cb(...(args as A))
@@ -36,6 +42,23 @@ const api = {
     onData: (cb: (id: string, data: string) => void) => on<[string, string]>('pty:data', cb),
     onExit: (cb: (id: string, code: number) => void) => on<[string, number]>('pty:exit', cb)
   },
+  browser: {
+    ensure: (id: string, url: string): Promise<void> =>
+      ipcRenderer.invoke('browser:ensure', id, url),
+    destroy: (id: string): Promise<void> => ipcRenderer.invoke('browser:destroy', id),
+    setBounds: (id: string, bounds: Bounds, visible: boolean): Promise<void> =>
+      ipcRenderer.invoke('browser:bounds', id, bounds, visible),
+    navigate: (id: string, url: string): Promise<void> =>
+      ipcRenderer.invoke('browser:navigate', id, url),
+    back: (id: string): Promise<void> => ipcRenderer.invoke('browser:back', id),
+    forward: (id: string): Promise<void> => ipcRenderer.invoke('browser:forward', id),
+    reload: (id: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
+    stop: (id: string): Promise<void> => ipcRenderer.invoke('browser:stop', id),
+    focus: (id: string): Promise<void> => ipcRenderer.invoke('browser:focus', id),
+    onState: (cb: (id: string, state: BrowserState) => void) =>
+      on<[string, BrowserState]>('browser:state', cb)
+  },
+  focusPage: (): Promise<void> => ipcRenderer.invoke('window:focus-page'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:open-external', url),
   onMenu: (cb: (action: string, payload?: unknown) => void): (() => void) => {
     const channels = [

@@ -6,19 +6,19 @@ import {
   Menu,
   session,
   shell,
-  type MenuItemConstructorOptions
+  type MenuItemConstructorOptions,
+  type Rectangle
 } from 'electron'
 import path from 'node:path'
+import { BROWSER_PARTITION, BrowserViews } from './browser'
 import { ConfigStore } from './config'
 import { PtyManager } from './pty'
 import { createSession, killSession, listSessions, renameSession } from './tmux'
-import type { RipponConfig, SessionInfo, SshConfig } from '../shared/types'
-
-/** Every browser pane shares this session, so a GitHub login in one tab is a login in all of them. */
-const BROWSER_PARTITION = 'persist:rippon-browser'
+import type { BrowserState, RipponConfig, SessionInfo, SshConfig } from '../shared/types'
 
 const configStore = new ConfigStore()
 const ptys = new PtyManager()
+const browsers = new BrowserViews()
 let mainWindow: BrowserWindow | null = null
 
 function send(channel: string, ...args: unknown[]): void {
@@ -44,11 +44,11 @@ function createWindow(): void {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
-      webviewTag: true
+      sandbox: false
     }
   })
 
+  browsers.attach(mainWindow)
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -74,30 +74,6 @@ function configureBrowserSession(): void {
     .replace(/ Electron\/[\d.]+/, '')
     .replace(new RegExp(` ${app.getName()}\\/[\\d.]+`, 'i'), '')
   s.setUserAgent(ua)
-}
-
-function wireWebviewPopups(): void {
-  app.on('web-contents-created', (_event, contents) => {
-    if (contents.getType() !== 'webview') return
-
-    contents.setWindowOpenHandler(({ url, disposition }) => {
-      // window.open with features (OAuth / SSO flows) genuinely needs its own
-      // window; a plain target=_blank link should just navigate the pane.
-      if (disposition === 'new-window') {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            width: 560,
-            height: 760,
-            autoHideMenuBar: true,
-            webPreferences: { partition: BROWSER_PARTITION, contextIsolation: true }
-          }
-        }
-      }
-      if (/^https?:/i.test(url)) void contents.loadURL(url)
-      return { action: 'deny' }
-    })
-  })
 }
 
 function buildMenu(): void {
@@ -284,6 +260,24 @@ function registerIpc(): void {
   )
   ipcMain.handle('pty:kill', (_e, id: string) => ptys.kill(id))
 
+  ipcMain.handle('browser:ensure', (_e, id: string, url: string) => browsers.ensure(id, url))
+  ipcMain.handle('browser:destroy', (_e, id: string) => browsers.destroy(id))
+  ipcMain.handle('browser:bounds', (_e, id: string, bounds: Rectangle, visible: boolean) =>
+    browsers.setBounds(id, bounds, visible)
+  )
+  ipcMain.handle('browser:navigate', (_e, id: string, url: string) => browsers.navigate(id, url))
+  ipcMain.handle('browser:back', (_e, id: string) => browsers.goBack(id))
+  ipcMain.handle('browser:forward', (_e, id: string) => browsers.goForward(id))
+  ipcMain.handle('browser:reload', (_e, id: string) => browsers.reload(id))
+  ipcMain.handle('browser:stop', (_e, id: string) => browsers.stop(id))
+  ipcMain.handle('browser:focus', (_e, id: string) => browsers.focus(id))
+
+  // Keyboard focus lives in whichever web contents has it; a native browser view
+  // holds it until we hand it back, or ⌘L would type into the page.
+  ipcMain.handle('window:focus-page', () => mainWindow?.webContents.focus())
+
+  browsers.on('state', (id: string, state: BrowserState) => send('browser:state', id, state))
+
   ipcMain.handle('shell:open-external', (_e, url: string) => {
     if (/^https?:/i.test(url)) void shell.openExternal(url)
   })
@@ -299,7 +293,6 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   configureBrowserSession()
-  wireWebviewPopups()
   registerIpc()
   buildMenu()
   createWindow()
@@ -315,5 +308,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   ptys.killAll()
+  browsers.destroyAll()
   configStore.dispose()
 })

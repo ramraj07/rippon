@@ -74,7 +74,10 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   }
 
   useImperativeHandle(ref, () => ({
-    focus: () => termRef.current?.focus(),
+    focus: () => {
+      // A browser view may hold keyboard focus; take it back first.
+      void window.rippon.focusPage().then(() => termRef.current?.focus())
+    },
     reattach: () => {
       termRef.current?.reset()
       void window.rippon.pty.kill(id)

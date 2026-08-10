@@ -54,6 +54,15 @@ export interface RipponConfig {
   sessions: Record<string, SessionConfig>
 }
 
+/** Navigation state of a browser pane, pushed from the main process. */
+export interface BrowserState {
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
 /** A tmux session as reported by the remote host. */
 export interface SessionInfo {
   name: string

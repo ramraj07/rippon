@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Webview, type WebviewElement } from './webview'
+import type { BrowserState } from '@shared/types'
 
 export interface BrowserHandle {
   navigate(url: string): void
@@ -8,8 +8,15 @@ export interface BrowserHandle {
 }
 
 interface Props {
+  /** Identifies the main-process view. The tmux session name. */
+  id: string
   url: string
   active: boolean
+  /**
+   * A WebContentsView paints above the page, so anything overlaying the app —
+   * a modal, a context menu — has to hide it.
+   */
+  suppressed: boolean
   onUrlChange(url: string): void
   onClose(): void
 }
@@ -19,140 +26,142 @@ export function toUrl(input: string): string {
   const text = input.trim()
   if (!text) return 'about:blank'
   if (/^[a-z][a-z0-9+.-]*:/i.test(text)) return text
-  const looksLikeHost = /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#].*)?$/.test(text) || text.startsWith('localhost')
+  const looksLikeHost =
+    /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#].*)?$/.test(text) || text.startsWith('localhost')
   if (looksLikeHost) return `https://${text}`
   return `https://www.google.com/search?q=${encodeURIComponent(text)}`
 }
 
 const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
-  { url, active, onUrlChange, onClose },
+  { id, url, active, suppressed, onUrlChange, onClose },
   ref
 ) {
-  const viewRef = useRef<WebviewElement | null>(null)
-  const hostRef = useRef<HTMLDivElement>(null)
+  const slotRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  /** Where the webview actually is, so we don't fight the address bar while typing. */
+  /** Where the view actually is, so we don't fight the address bar while typing. */
   const currentUrlRef = useRef(url)
+  const editingRef = useRef(false)
   const [address, setAddress] = useState(url)
-  const [loading, setLoading] = useState(false)
-  const [nav, setNav] = useState({ back: false, forward: false })
-  const [initialUrl] = useState(() => url)
+  const [state, setState] = useState<BrowserState | null>(null)
+
+  const visible = active && !suppressed
 
   function navigate(target: string): void {
     const next = toUrl(target)
     currentUrlRef.current = next
     setAddress(next)
-    const view = viewRef.current
-    if (view) void view.loadURL(next).catch(() => undefined)
+    void window.rippon.browser.navigate(id, next)
     onUrlChange(next)
   }
 
   useImperativeHandle(ref, () => ({
     navigate,
     focusAddress: () => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      // The view may hold keyboard focus; take it back before focusing the input.
+      void window.rippon.focusPage().then(() => {
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      })
     },
-    reload: () => viewRef.current?.reload()
+    reload: () => void window.rippon.browser.reload(id)
   }))
 
+  // Create the view on mount, tear it down when the pane closes.
+  useEffect(() => {
+    void window.rippon.browser.ensure(id, currentUrlRef.current)
+    return () => {
+      void window.rippon.browser.destroy(id)
+    }
+  }, [id])
+
   /**
-   * The guest sizes itself from the element's own CSS width and height, and
-   * does not reliably follow a size it inherits from flex. Measure the host and
-   * set pixels explicitly so every resize reaches the content.
+   * The view has no layout of its own — the renderer measures this placeholder
+   * and pushes the rectangle across. Coalesced to a frame so a splitter drag
+   * does not flood the IPC channel.
    */
-  const syncSize = useCallback(() => {
-    const host = hostRef.current
-    const view = viewRef.current
-    if (!host || !view) return
-    const { width, height } = host.getBoundingClientRect()
-    // Zero means we are inside a hidden pane; re-measured when it is shown again.
-    if (width < 1 || height < 1) return
-    view.style.width = `${Math.round(width)}px`
-    view.style.height = `${Math.round(height)}px`
-  }, [])
+  const pending = useRef<number | null>(null)
+  const syncBounds = useCallback(() => {
+    if (pending.current !== null) return
+    pending.current = requestAnimationFrame(() => {
+      pending.current = null
+      const slot = slotRef.current
+      if (!slot) return
+      const r = slot.getBoundingClientRect()
+      void window.rippon.browser.setBounds(
+        id,
+        { x: r.left, y: r.top, width: r.width, height: r.height },
+        visible && r.width >= 1 && r.height >= 1
+      )
+    })
+  }, [id, visible])
 
   useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-    syncSize()
-    const observer = new ResizeObserver(syncSize)
-    observer.observe(host)
-    return () => observer.disconnect()
-  }, [syncSize])
+    const slot = slotRef.current
+    if (!slot) return
+    syncBounds()
+    const observer = new ResizeObserver(syncBounds)
+    observer.observe(slot)
+    // Resizing the window moves the slot without resizing it in some layouts,
+    // and a scrolling tile grid moves it without any resize at all.
+    window.addEventListener('resize', syncBounds)
+    window.addEventListener('scroll', syncBounds, true)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', syncBounds)
+      window.removeEventListener('scroll', syncBounds, true)
+      if (pending.current !== null) cancelAnimationFrame(pending.current)
+      pending.current = null
+    }
+  }, [syncBounds])
 
-  // A pane hidden during a resize keeps its old size until it is shown again.
+  // Track navigation happening inside the view.
   useEffect(() => {
-    if (!active) return
-    const t = setTimeout(syncSize, 0)
-    return () => clearTimeout(t)
-  }, [active, syncSize])
+    return window.rippon.browser.onState((viewId, next) => {
+      if (viewId !== id) return
+      setState(next)
+      if (next.url && next.url !== currentUrlRef.current) {
+        currentUrlRef.current = next.url
+        if (!editingRef.current) setAddress(next.url)
+        onUrlChange(next.url)
+      }
+    })
+  }, [id, onUrlChange])
 
   // Follow config changes (external edits, or a link clicked in the terminal).
   useEffect(() => {
     if (url === currentUrlRef.current) return
     currentUrlRef.current = url
     setAddress(url)
-    const view = viewRef.current
-    if (view) void view.loadURL(url).catch(() => undefined)
-  }, [url])
+    void window.rippon.browser.navigate(id, url)
+  }, [id, url])
 
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view) return
-
-    const syncNav = (): void => {
-      setNav({ back: view.canGoBack(), forward: view.canGoForward() })
-    }
-    const onNavigate = (e: Event): void => {
-      const next = (e as Event & { url?: string }).url ?? view.getURL()
-      if ((e as Event & { isMainFrame?: boolean }).isMainFrame === false) return
-      currentUrlRef.current = next
-      setAddress(next)
-      onUrlChange(next)
-      syncNav()
-    }
-    const onStart = (): void => setLoading(true)
-    const onStop = (): void => {
-      setLoading(false)
-      syncNav()
-    }
-
-    view.addEventListener('did-navigate', onNavigate)
-    view.addEventListener('did-navigate-in-page', onNavigate)
-    view.addEventListener('did-start-loading', onStart)
-    view.addEventListener('did-stop-loading', onStop)
-    return () => {
-      view.removeEventListener('did-navigate', onNavigate)
-      view.removeEventListener('did-navigate-in-page', onNavigate)
-      view.removeEventListener('did-start-loading', onStart)
-      view.removeEventListener('did-stop-loading', onStop)
-    }
-  }, [onUrlChange])
+  const loading = state?.loading ?? false
 
   return (
     <div className="pane browser-pane">
       <div className="pane-header">
         <button
           className="icon-btn"
-          disabled={!nav.back}
+          disabled={!state?.canGoBack}
           title="Back"
-          onClick={() => viewRef.current?.goBack()}
+          onClick={() => void window.rippon.browser.back(id)}
         >
           ‹
         </button>
         <button
           className="icon-btn"
-          disabled={!nav.forward}
+          disabled={!state?.canGoForward}
           title="Forward"
-          onClick={() => viewRef.current?.goForward()}
+          onClick={() => void window.rippon.browser.forward(id)}
         >
           ›
         </button>
         <button
           className="icon-btn"
           title="Reload (⌘R)"
-          onClick={() => (loading ? viewRef.current?.stop() : viewRef.current?.reload())}
+          onClick={() =>
+            void (loading ? window.rippon.browser.stop(id) : window.rippon.browser.reload(id))
+          }
         >
           {loading ? '×' : '⟳'}
         </button>
@@ -170,6 +179,8 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
             value={address}
             spellCheck={false}
             placeholder="Enter a URL or search…"
+            onFocus={() => (editingRef.current = true)}
+            onBlur={() => (editingRef.current = false)}
             onChange={(e) => setAddress(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -190,15 +201,7 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
           ×
         </button>
       </div>
-      <div className="webview-host" ref={hostRef}>
-        <Webview
-          ref={viewRef}
-          src={initialUrl}
-          partition="persist:rippon-browser"
-          allowpopups="true"
-          className={active ? 'webview' : 'webview webview-hidden'}
-        />
-      </div>
+      <div className="webview-host" ref={slotRef} />
     </div>
   )
 })

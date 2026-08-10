@@ -707,24 +707,15 @@ body {
   border-color: var(--accent);
 }
 
+/*
+ * Placeholder only. The page itself is a WebContentsView owned by the main
+ * process, positioned over this rectangle — see syncBounds in BrowserPane.
+ */
 .webview-host {
-  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
-  background: #fff;
-}
-
-/* Size comes from JS in pixels — see syncSize in BrowserPane. */
-.webview {
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-
-.webview-hidden {
-  visibility: hidden;
+  background: #16191f;
 }
 
 .empty {
