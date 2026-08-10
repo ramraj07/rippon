@@ -11,6 +11,9 @@ export const BROWSER_PARTITION = 'persist:rippon-browser'
  * therefore scales every other pane on the same site.
  */
 
+/** Ceiling on how often a guest is asked to lay the page out again, in ms. */
+const MIN_APPLY_INTERVAL_MS = 70
+
 /**
  * Browser panes are WebContentsViews owned by the main process, with bounds
  * pushed from the renderer. The deprecated <webview> tag derives its guest size
@@ -27,6 +30,9 @@ export class BrowserViews extends EventEmitter {
   private lastBounds = new Map<string, Rectangle>()
   private lastVisible = new Map<string, boolean>()
   private lastZoom = new Map<string, number>()
+  private queued = new Map<string, { bounds: Rectangle; visible: boolean }>()
+  private applyTimers = new Map<string, NodeJS.Timeout>()
+  private lastApplied = new Map<string, number>()
   private hung = new Set<string>()
 
   attach(win: BrowserWindow): void {
@@ -115,12 +121,44 @@ export class BrowserViews extends EventEmitter {
     )
   }
 
+  /**
+   * Queue a rectangle rather than applying it. Maximizing a window, or dragging
+   * its edge, produces a burst of distinct sizes, and every one of them makes
+   * the guest lay the whole page out again — enough to wedge a heavy page for
+   * good. Applying at a bounded rate keeps the burst survivable; the trailing
+   * flush guarantees the final size always lands.
+   */
   setBounds(id: string, bounds: Rectangle, visible: boolean): void {
-    const view = this.views.get(id)
-    if (!view) {
+    if (!this.views.has(id)) {
       if (process.env['RIPPON_TRACE']) console.log(`[bounds] ${id}: NO VIEW`)
       return
     }
+    this.queued.set(id, { bounds, visible })
+
+    const since = Date.now() - (this.lastApplied.get(id) ?? 0)
+    if (since >= MIN_APPLY_INTERVAL_MS) {
+      this.flushBounds(id)
+      return
+    }
+    if (!this.applyTimers.has(id)) {
+      this.applyTimers.set(
+        id,
+        setTimeout(() => {
+          this.applyTimers.delete(id)
+          this.flushBounds(id)
+        }, MIN_APPLY_INTERVAL_MS - since)
+      )
+    }
+  }
+
+  private flushBounds(id: string): void {
+    const view = this.views.get(id)
+    const queued = this.queued.get(id)
+    if (!view || !queued) return
+    this.queued.delete(id)
+    this.lastApplied.set(id, Date.now())
+    const { bounds, visible } = queued
+
     if (process.env['RIPPON_TRACE']) {
       // Only when the geometry actually changes — a drag fires this every frame.
       const key = `${Math.round(bounds.width)}x${Math.round(bounds.height)}@${Math.round(bounds.x)},${Math.round(bounds.y)}:${visible}`
@@ -199,7 +237,26 @@ export class BrowserViews extends EventEmitter {
   }
 
   reload(id: string): void {
-    this.act(id, (wc) => wc.reload())
+    this.act(id, (wc) => {
+      if (!this.hung.has(id)) {
+        wc.reload()
+        return
+      }
+      /*
+       * A wedged renderer never gets round to servicing a reload — the whole
+       * problem is that it is not returning to its event loop. Kill the process
+       * first; the reload then comes up in a fresh one.
+       */
+      this.hung.delete(id)
+      try {
+        wc.forcefullyCrashRenderer()
+      } catch {
+        // already gone, which is the state we wanted
+      }
+      setTimeout(() => {
+        if (!wc.isDestroyed()) wc.reload()
+      }, 100)
+    })
   }
 
   stop(id: string): void {
@@ -217,6 +274,13 @@ export class BrowserViews extends EventEmitter {
     this.lastBounds.delete(id)
     this.lastVisible.delete(id)
     this.lastZoom.delete(id)
+    this.queued.delete(id)
+    this.lastApplied.delete(id)
+    const timer = this.applyTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      this.applyTimers.delete(id)
+    }
     this.lastLogged.delete(id)
     this.hung.delete(id)
     this.window?.contentView.removeChildView(view)
