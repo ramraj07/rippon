@@ -46,8 +46,8 @@ const api = {
     ensure: (id: string, url: string): Promise<void> =>
       ipcRenderer.invoke('browser:ensure', id, url),
     destroy: (id: string): Promise<void> => ipcRenderer.invoke('browser:destroy', id),
-    setBounds: (id: string, bounds: Bounds, visible: boolean): Promise<void> =>
-      ipcRenderer.invoke('browser:bounds', id, bounds, visible),
+    setBounds: (id: string, bounds: Bounds, visible: boolean, zoom: number): Promise<void> =>
+      ipcRenderer.invoke('browser:bounds', id, bounds, visible, zoom),
     navigate: (id: string, url: string): Promise<void> =>
       ipcRenderer.invoke('browser:navigate', id, url),
     setZoom: (id: string, factor: number): Promise<void> =>

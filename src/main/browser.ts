@@ -15,6 +15,14 @@ export const BROWSER_PARTITION = 'persist:rippon-browser'
 const MIN_APPLY_INTERVAL_MS = 70
 
 /**
+ * Narrowest layout viewport any page is given. Verified in isolation: two bare
+ * WebContentsViews on the same session showing the same URL idle at 680x860,
+ * spin at 100% CPU at 263x246, and idle again at 263x246 with zoom 0.5.
+ */
+const MIN_CSS_VIEWPORT = 560
+const MIN_AUTO_ZOOM = 0.25
+
+/**
  * Browser panes are WebContentsViews owned by the main process, with bounds
  * pushed from the renderer. The deprecated <webview> tag derives its guest size
  * from CSS, which does not reliably follow flex or survive a hidden ancestor —
@@ -30,7 +38,8 @@ export class BrowserViews extends EventEmitter {
   private lastBounds = new Map<string, Rectangle>()
   private lastVisible = new Map<string, boolean>()
   private lastZoom = new Map<string, number>()
-  private queued = new Map<string, { bounds: Rectangle; visible: boolean }>()
+  private lastRequest = new Map<string, { width: number; zoom: number }>()
+  private queued = new Map<string, { bounds: Rectangle; visible: boolean; zoom: number }>()
   private applyTimers = new Map<string, NodeJS.Timeout>()
   private lastApplied = new Map<string, number>()
   private hung = new Set<string>()
@@ -94,7 +103,10 @@ export class BrowserViews extends EventEmitter {
     // A new origin arrives with whatever zoom the session has stored for it, so
     // drop the cache and let the renderer re-apply this view's value.
     wc.on('did-navigate', () => {
+      // A new origin arrives with whatever the session stored for it.
       this.lastZoom.delete(id)
+      const last = this.lastRequest.get(id)
+      if (last) this.applyZoom(id, last.width, last.zoom)
       update()
     })
     wc.on('did-navigate-in-page', update)
@@ -142,12 +154,12 @@ export class BrowserViews extends EventEmitter {
    * good. Applying at a bounded rate keeps the burst survivable; the trailing
    * flush guarantees the final size always lands.
    */
-  setBounds(id: string, bounds: Rectangle, visible: boolean): void {
+  setBounds(id: string, bounds: Rectangle, visible: boolean, zoom = 1): void {
     if (!this.views.has(id)) {
       if (process.env['RIPPON_TRACE']) console.log(`[bounds] ${id}: NO VIEW`)
       return
     }
-    this.queued.set(id, { bounds, visible })
+    this.queued.set(id, { bounds, visible, zoom })
 
     const since = Date.now() - (this.lastApplied.get(id) ?? 0)
     if (since >= MIN_APPLY_INTERVAL_MS) {
@@ -171,7 +183,8 @@ export class BrowserViews extends EventEmitter {
     if (!view || !queued) return
     this.queued.delete(id)
     this.lastApplied.set(id, Date.now())
-    const { bounds, visible } = queued
+    const { bounds, visible, zoom } = queued
+    this.lastRequest.set(id, { width: bounds.width, zoom })
 
     if (process.env['RIPPON_TRACE']) {
       // Only when the geometry actually changes — a drag fires this every frame.
@@ -211,6 +224,9 @@ export class BrowserViews extends EventEmitter {
       prev.height !== next.height
     ) {
       this.lastBounds.set(id, next)
+      // Zoom first: a page that lays out narrow even for one frame can enter a
+      // loop it never leaves, so it must never see the smaller size unscaled.
+      this.applyZoom(id, next.width, zoom)
       view.setBounds(next)
     }
     if (this.lastVisible.get(id) !== true) {
@@ -223,6 +239,16 @@ export class BrowserViews extends EventEmitter {
     const view = this.views.get(id)
     if (!view || view.webContents.isDestroyed()) return
     fn(view.webContents)
+  }
+
+  /**
+   * Cap zoom so the page always lays out at MIN_CSS_VIEWPORT or wider. Sites hit
+   * their least-tested breakpoints below that; GitHub's PR inbox spins its
+   * renderer at 100% CPU indefinitely at ~260px and never recovers.
+   */
+  private applyZoom(id: string, width: number, viewZoom: number): void {
+    const fitted = width > 0 ? width / MIN_CSS_VIEWPORT : 1
+    this.setZoom(id, Math.max(MIN_AUTO_ZOOM, Math.min(viewZoom, fitted)))
   }
 
   /**
@@ -288,6 +314,7 @@ export class BrowserViews extends EventEmitter {
     this.lastBounds.delete(id)
     this.lastVisible.delete(id)
     this.lastZoom.delete(id)
+    this.lastRequest.delete(id)
     this.queued.delete(id)
     this.lastApplied.delete(id)
     const timer = this.applyTimers.get(id)

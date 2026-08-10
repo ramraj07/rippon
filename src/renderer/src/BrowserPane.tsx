@@ -35,16 +35,6 @@ export function toUrl(input: string): string {
 }
 
 /**
- * Below roughly this CSS width, real sites hit their least-tested breakpoints —
- * GitHub's PR inbox spins its renderer at 100% CPU indefinitely at ~260px, and
- * stops the moment the layout viewport is wider. Verified in isolation with two
- * bare WebContentsViews and no app code involved. Scaling the page down is what
- * buys the width back, so a pane never hands a site less than this.
- */
-const MIN_CSS_VIEWPORT = 560
-const MIN_AUTO_ZOOM = 0.25
-
-/**
  * A native view has no CSS clipping: it is not confined to a scrolling
  * container and not clipped by the window. A pane scrolled below the fold of a
  * tile grid was therefore positioned off-window at full size, which paints over
@@ -91,7 +81,6 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   const editingRef = useRef(false)
   const [address, setAddress] = useState(url)
   const [state, setState] = useState<BrowserState | null>(null)
-  const [paneWidth, setPaneWidth] = useState(0)
 
   const visible = active && !suppressed
 
@@ -144,10 +133,9 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
       const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height},${showing}`
       if (key === lastSent.current) return
       lastSent.current = key
-      setPaneWidth(bounds.width)
-      void window.rippon.browser.setBounds(id, bounds, showing)
+      void window.rippon.browser.setBounds(id, bounds, showing, zoom)
     })
-  }, [id, visible])
+  }, [id, visible, zoom])
 
   useEffect(() => {
     const slot = slotRef.current
@@ -181,17 +169,13 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     }
   }, [syncBounds])
 
-  /*
-   * The view's zoom, except never so far in that the page lays out below
-   * MIN_CSS_VIEWPORT — a narrow tile would otherwise wedge the guest. Re-applied
-   * after each navigation, since a new origin arrives carrying whatever the
-   * session last stored for it, which may be another view's value.
-   */
+  // Zoom travels with the bounds, so the main process can apply it first — see
+  // applyZoom there. A resize that shrank the pane before scaling the page down
+  // let it lay out narrow for a frame, which was enough to wedge it.
   useEffect(() => {
-    const fitted = paneWidth > 0 ? paneWidth / MIN_CSS_VIEWPORT : 1
-    const effective = Math.max(MIN_AUTO_ZOOM, Math.min(zoom, fitted))
-    void window.rippon.browser.setZoom(id, effective)
-  }, [id, zoom, paneWidth, state?.url])
+    lastSent.current = ''
+    syncBounds()
+  }, [zoom, syncBounds])
 
   // Track navigation happening inside the view.
   useEffect(() => {

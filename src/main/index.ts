@@ -320,8 +320,10 @@ function registerIpc(): void {
 
   ipcMain.handle('browser:ensure', (_e, id: string, url: string) => browsers.ensure(id, url))
   ipcMain.handle('browser:destroy', (_e, id: string) => browsers.destroy(id))
-  ipcMain.handle('browser:bounds', (_e, id: string, bounds: Rectangle, visible: boolean) =>
-    browsers.setBounds(id, bounds, visible)
+  ipcMain.handle(
+    'browser:bounds',
+    (_e, id: string, bounds: Rectangle, visible: boolean, zoom: number) =>
+      browsers.setBounds(id, bounds, visible, zoom)
   )
   ipcMain.handle('browser:navigate', (_e, id: string, url: string) => browsers.navigate(id, url))
   ipcMain.handle('browser:zoom', (_e, id: string, factor: number) => browsers.setZoom(id, factor))
