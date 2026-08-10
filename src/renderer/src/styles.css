@@ -708,15 +708,19 @@ body {
 }
 
 .webview-host {
+  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  display: flex;
+  overflow: hidden;
   background: #fff;
 }
 
+/* Size comes from JS in pixels — see syncSize in BrowserPane. */
 .webview {
-  flex: 1;
-  min-width: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 .webview-hidden {

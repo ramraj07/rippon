@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Webview, type WebviewElement } from './webview'
 
 export interface BrowserHandle {
@@ -28,6 +28,7 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   ref
 ) {
   const viewRef = useRef<WebviewElement | null>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   /** Where the webview actually is, so we don't fight the address bar while typing. */
   const currentUrlRef = useRef(url)
@@ -53,6 +54,38 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     },
     reload: () => viewRef.current?.reload()
   }))
+
+  /**
+   * The guest sizes itself from the element's own CSS width and height, and
+   * does not reliably follow a size it inherits from flex. Measure the host and
+   * set pixels explicitly so every resize reaches the content.
+   */
+  const syncSize = useCallback(() => {
+    const host = hostRef.current
+    const view = viewRef.current
+    if (!host || !view) return
+    const { width, height } = host.getBoundingClientRect()
+    // Zero means we are inside a hidden pane; re-measured when it is shown again.
+    if (width < 1 || height < 1) return
+    view.style.width = `${Math.round(width)}px`
+    view.style.height = `${Math.round(height)}px`
+  }, [])
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    syncSize()
+    const observer = new ResizeObserver(syncSize)
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [syncSize])
+
+  // A pane hidden during a resize keeps its old size until it is shown again.
+  useEffect(() => {
+    if (!active) return
+    const t = setTimeout(syncSize, 0)
+    return () => clearTimeout(t)
+  }, [active, syncSize])
 
   // Follow config changes (external edits, or a link clicked in the terminal).
   useEffect(() => {
@@ -153,7 +186,7 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
           ↗
         </button>
       </div>
-      <div className="webview-host">
+      <div className="webview-host" ref={hostRef}>
         <Webview
           ref={viewRef}
           src={initialUrl}
