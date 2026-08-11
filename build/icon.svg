@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#31497f" />
+      <stop offset="0.55" stop-color="#1d2a4c" />
+      <stop offset="1" stop-color="#0e1424" />
+    </linearGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#dfe4ee" />
+    </linearGradient>
+  </defs>
+
+  <!-- macOS draws its own mask, but a rounded field keeps it right at every size -->
+  <rect width="1024" height="1024" rx="228" fill="url(#sky)" />
+
+  <g fill="url(#stone)">
+    <!-- finial and dome over the clock tower -->
+    <rect x="506" y="126" width="12" height="52" rx="6" />
+    <circle cx="512" cy="188" r="17" />
+    <path d="M512 206c46 0 78 34 78 76H434c0-42 32-76 78-76z" />
+    <rect x="420" y="282" width="184" height="26" rx="8" />
+
+    <!-- tower shaft -->
+    <rect x="448" y="308" width="128" height="316" />
+    <rect x="430" y="596" width="164" height="26" rx="8" />
+
+    <!-- upper storey, set back behind the wings -->
+    <rect x="286" y="470" width="452" height="152" />
+    <rect x="268" y="606" width="488" height="26" rx="8" />
+
+    <!-- arcaded wings -->
+    <rect x="140" y="632" width="744" height="192" />
+
+    <!-- plinth: stacked slabs, each a little wider than the one above -->
+    <rect x="122" y="824" width="780" height="28" rx="6" />
+    <rect x="100" y="852" width="824" height="30" rx="7" />
+  </g>
+
+  <!-- openings, cut in the sky colour so they read as depth -->
+  <g fill="#16203a">
+    <!-- clock -->
+    <circle cx="512" cy="392" r="52" />
+    <g stroke="#ffffff" stroke-width="11" stroke-linecap="round">
+      <line x1="512" y1="392" x2="512" y2="356" />
+      <line x1="512" y1="392" x2="540" y2="406" />
+    </g>
+
+    <!-- tower louvres -->
+    <rect x="482" y="482" width="60" height="86" rx="30" />
+
+    <!-- upper storey windows -->
+    <g>
+      <rect x="318" y="506" width="42" height="86" rx="21" />
+      <rect x="388" y="506" width="42" height="86" rx="21" />
+      <rect x="594" y="506" width="42" height="86" rx="21" />
+      <rect x="664" y="506" width="42" height="86" rx="21" />
+    </g>
+
+    <!-- arcade: four arches each side of the tower -->
+    <g>
+      <path d="M176 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M247 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M318 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M389 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M583 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M654 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M725 800V722a26 26 0 0 1 52 0v78z" />
+      <path d="M796 800V722a26 26 0 0 1 52 0v78z" />
+    </g>
+
+    <!-- central entrance -->
+    <path d="M470 800V706a42 42 0 0 1 84 0v94z" />
+  </g>
+</svg>
