@@ -1,11 +1,23 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { bookmarkLabel, type Bookmark, type BookmarkScope, type BrowserState } from '@shared/types'
+import {
+  bookmarkLabel,
+  type Bookmark,
+  type BookmarkScope,
+  type BrowserState,
+  type FindMatches
+} from '@shared/types'
 import type { MenuItem } from './Dialogs'
+import FindBar, { type FindHandle } from './FindBar'
+
+const NO_MATCHES: FindMatches = { active: 0, total: 0 }
 
 export interface BrowserHandle {
   navigate(url: string): void
   focusAddress(): void
   reload(): void
+  openFind(): void
+  /** Advance the open search. Opens the bar if ⌘G was pressed cold. */
+  stepFind(delta: 1 | -1): void
 }
 
 interface Props {
@@ -106,6 +118,11 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   const editingRef = useRef(false)
   const [address, setAddress] = useState(url)
   const [state, setState] = useState<BrowserState | null>(null)
+  const findRef = useRef<FindHandle>(null)
+  const [finding, setFinding] = useState(false)
+  const [matches, setMatches] = useState<FindMatches>(NO_MATCHES)
+  /** Last query, so ⌘G can step without the bar re-sending it. */
+  const queryRef = useRef('')
 
   const visible = active && !suppressed
 
@@ -117,6 +134,15 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     onUrlChange(next)
   }
 
+  function closeFind(): void {
+    setFinding(false)
+    setMatches(NO_MATCHES)
+    queryRef.current = ''
+    void window.rippon.browser.findStop(id)
+    // Esc should leave you back on the page, as it would in a browser.
+    void window.rippon.browser.focus(id)
+  }
+
   useImperativeHandle(ref, () => ({
     navigate,
     focusAddress: () => {
@@ -126,7 +152,20 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
         inputRef.current?.select()
       })
     },
-    reload: () => void window.rippon.browser.reload(id)
+    reload: () => void window.rippon.browser.reload(id),
+    openFind: () => {
+      setFinding(true)
+      // Same as ⌘L: the native view holds the keyboard until we take it back.
+      void window.rippon.focusPage().then(() => findRef.current?.focus())
+    },
+    stepFind: (delta) => {
+      if (!queryRef.current) {
+        setFinding(true)
+        void window.rippon.focusPage().then(() => findRef.current?.focus())
+        return
+      }
+      void window.rippon.browser.find(id, queryRef.current, delta > 0)
+    }
   }))
 
   // Create the view on mount, tear it down when the pane closes.
@@ -202,6 +241,12 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
     syncBounds()
   }, [zoom, syncBounds])
 
+  useEffect(() => {
+    return window.rippon.browser.onFound((viewId, next) => {
+      if (viewId === id) setMatches(next)
+    })
+  }, [id])
+
   // Track navigation happening inside the view.
   useEffect(() => {
     return window.rippon.browser.onState((viewId, next) => {
@@ -211,6 +256,12 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
         currentUrlRef.current = next.url
         if (!editingRef.current) setAddress(next.url)
         onUrlChange(next.url)
+        // The matches belonged to the old page. Re-run against the new one so a
+        // bar left open keeps meaning something.
+        if (queryRef.current) {
+          setMatches(NO_MATCHES)
+          void window.rippon.browser.find(id, queryRef.current, true)
+        }
       }
     })
   }, [id, onUrlChange])
@@ -368,6 +419,21 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
             : 'This page has stopped responding and will not redraw or resize.'}
           <button onClick={() => void window.rippon.browser.reload(id)}>reload</button>
         </div>
+      ) : null}
+      {finding ? (
+        <FindBar
+          ref={findRef}
+          matches={matches}
+          onQuery={(query) => {
+            queryRef.current = query
+            if (!query) setMatches(NO_MATCHES)
+            void window.rippon.browser.find(id, query, true)
+          }}
+          onStep={(delta) => {
+            if (queryRef.current) void window.rippon.browser.find(id, queryRef.current, delta > 0)
+          }}
+          onClose={closeFind}
+        />
       ) : null}
       <div className="webview-host" ref={slotRef} />
     </div>

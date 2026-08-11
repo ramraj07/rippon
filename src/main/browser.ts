@@ -1,6 +1,6 @@
 import { BrowserWindow, WebContentsView, type Rectangle } from 'electron'
 import { EventEmitter } from 'node:events'
-import type { BrowserState } from '../shared/types'
+import type { BrowserState, FindMatches } from '../shared/types'
 
 /** Every browser pane shares this session, so a GitHub login in one is a login in all. */
 export const BROWSER_PARTITION = 'persist:rippon-browser'
@@ -44,6 +44,8 @@ export class BrowserViews extends EventEmitter {
   private lastApplied = new Map<string, number>()
   private hung = new Set<string>()
   private crashed = new Map<string, string>()
+  /** The query currently live in each view's find session. See find(). */
+  private findQuery = new Map<string, string>()
 
   attach(win: BrowserWindow): void {
     this.window = win
@@ -105,6 +107,8 @@ export class BrowserViews extends EventEmitter {
     wc.on('did-navigate', () => {
       // A new origin arrives with whatever the session stored for it.
       this.lastZoom.delete(id)
+      // The old page's matches went with it, so the next find must start over.
+      this.findQuery.delete(id)
       this.applyZoom()
       update()
     })
@@ -112,6 +116,17 @@ export class BrowserViews extends EventEmitter {
     wc.on('did-start-loading', update)
     wc.on('did-stop-loading', update)
     wc.on('page-title-updated', update)
+
+    wc.on('found-in-page', (_e, result) => {
+      const matches: FindMatches = { active: result.activeMatchOrdinal, total: result.matches }
+      this.emit('found', id, matches)
+    })
+
+    /*
+     * Which pane ⌘F searches depends on where the caret was, and a native view
+     * takes focus without the renderer ever seeing an event. Report it.
+     */
+    wc.on('focus', () => this.emit('focus', id))
 
     // A page that wedges its renderer stops laying out, so it also stops
     // following the pane's size. Surface it rather than leaving a frozen pane.
@@ -317,6 +332,30 @@ export class BrowserViews extends EventEmitter {
     this.act(id, (wc) => wc.stop())
   }
 
+  /**
+   * findInPage separates starting a search from advancing one, and gets it
+   * wrong either way if told the wrong thing: findNext on a query it has not
+   * seen searches for nothing, and omitting it re-reports the same match
+   * forever. Tracking the live query lets callers just say what to search for
+   * and which way to go — a changed query restarts, an unchanged one steps.
+   */
+  find(id: string, query: string, forward = true): void {
+    if (!query) {
+      this.stopFind(id)
+      return
+    }
+    this.act(id, (wc) => {
+      const findNext = this.findQuery.get(id) === query
+      this.findQuery.set(id, query)
+      wc.findInPage(query, { forward, findNext })
+    })
+  }
+
+  stopFind(id: string): void {
+    if (!this.findQuery.delete(id)) return
+    this.act(id, (wc) => wc.stopFindInPage('clearSelection'))
+  }
+
   focus(id: string): void {
     this.act(id, (wc) => wc.focus())
   }
@@ -338,6 +377,7 @@ export class BrowserViews extends EventEmitter {
     }
     this.lastLogged.delete(id)
     this.hung.delete(id)
+    this.findQuery.delete(id)
     this.window?.contentView.removeChildView(view)
     view.webContents.close()
   }

@@ -35,7 +35,7 @@ import {
   type SshConfig,
   type TunnelStatus
 } from '../shared/types'
-import type { BrowserState } from '../shared/types'
+import type { BrowserState, FindMatches } from '../shared/types'
 
 /*
  * Pin the profile directory. A packaged build takes its name from productName
@@ -309,7 +309,36 @@ function buildMenu(): void {
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
     },
-    { role: 'editMenu' },
+    /*
+     * Spelled out rather than `role: 'editMenu'` so Find can live where macOS
+     * expects it. The accelerators are what matter: a menu accelerator fires
+     * whichever web contents holds focus, which is the only way ⌘F reaches us
+     * while a native browser view has the keyboard.
+     */
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => send('menu:find') },
+        {
+          label: 'Find Next',
+          accelerator: 'CmdOrCtrl+G',
+          click: () => send('menu:find-step', 1)
+        },
+        {
+          label: 'Find Previous',
+          accelerator: 'CmdOrCtrl+Shift+G',
+          click: () => send('menu:find-step', -1)
+        }
+      ]
+    },
     {
       label: 'View',
       submenu: [
@@ -574,12 +603,18 @@ function registerIpc(): void {
   ipcMain.handle('browser:reload', (_e, id: string) => browsers.reload(id))
   ipcMain.handle('browser:stop', (_e, id: string) => browsers.stop(id))
   ipcMain.handle('browser:focus', (_e, id: string) => browsers.focus(id))
+  ipcMain.handle('browser:find', (_e, id: string, query: string, forward: boolean) =>
+    browsers.find(id, query, forward)
+  )
+  ipcMain.handle('browser:find-stop', (_e, id: string) => browsers.stopFind(id))
 
   // Keyboard focus lives in whichever web contents has it; a native browser view
   // holds it until we hand it back, or ⌘L would type into the page.
   ipcMain.handle('window:focus-page', () => mainWindow?.webContents.focus())
 
   browsers.on('state', (id: string, state: BrowserState) => send('browser:state', id, state))
+  browsers.on('found', (id: string, matches: FindMatches) => send('browser:found', id, matches))
+  browsers.on('focus', (id: string) => send('browser:focused', id))
 
   ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle('clipboard:read', () => clipboard.readText())

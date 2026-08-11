@@ -167,6 +167,8 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 | `⌘⇧L` | refresh session list now |
 | `⌘L` | focus the address bar |
 | `⌘J` | focus the terminal |
+| `⌘F` | find in the pane you were last in — page text, or terminal scrollback |
+| `⌘G` / `⌘⇧G` | next / previous match |
 | `⌘R` | reload the browser pane |
 | `⌘⇧R` | reattach the session |
 | `⌘,` | SSH settings |
