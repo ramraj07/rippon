@@ -13,9 +13,29 @@ import {
 import path from 'node:path'
 import { BROWSER_PARTITION, BrowserViews } from './browser'
 import { ConfigStore } from './config'
+import {
+  createProfile,
+  deleteProfile,
+  listProfiles,
+  readProfile,
+  renameProfile,
+  writeProfile
+} from './profiles'
 import { PtyManager } from './pty'
 import { createSession, killSession, listSessions, renameSession } from './tmux'
-import type { BrowserState, RipponConfig, SessionInfo, SshConfig } from '../shared/types'
+import { TunnelManager } from './tunnel'
+import {
+  defaultProfile,
+  mergeConfig,
+  splitConfig,
+  type LocalConfig,
+  type Profile,
+  type RipponConfig,
+  type SessionInfo,
+  type SshConfig,
+  type TunnelStatus
+} from '../shared/types'
+import type { BrowserState } from '../shared/types'
 
 /*
  * Pin the profile directory. A packaged build takes its name from productName
@@ -28,6 +48,7 @@ app.setPath('userData', path.join(app.getPath('appData'), 'rippon'))
 const configStore = new ConfigStore()
 const ptys = new PtyManager()
 const browsers = new BrowserViews()
+const tunnels = new TunnelManager()
 let mainWindow: BrowserWindow | null = null
 /**
  * Set the moment teardown starts. The render frame is disposed before the
@@ -46,6 +67,7 @@ function send(channel: string, ...args: unknown[]): void {
 function beginShutdown(): void {
   shuttingDown = true
   ptys.killAll()
+  tunnels.stop()
   browsers.destroyAll()
 }
 
@@ -374,8 +396,11 @@ async function pickConfigFile(): Promise<void> {
   if (result.canceled || !result.filePaths[0]) return
 
   ptys.killAll()
-  const cfg = await configStore.setPath(result.filePaths[0])
-  send('config:changed', cfg, configStore.filePath)
+  tunnels.stop()
+  await configStore.setPath(result.filePaths[0])
+  const { config, profiles, error } = await buildConfigResponse()
+  send('config:changed', config, configStore.filePath, profiles)
+  if (error) send('app:error', error)
 }
 
 /** Wrap a remote call so the renderer always gets {ok} or {error} instead of a rejection. */
@@ -387,13 +412,125 @@ async function attempt<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } 
   }
 }
 
+/**
+ * Load the active profile from the host, running the one-time migration of a
+ * pre-profiles file if one is pending. A profiles-model app cannot paint layout
+ * without the connection, so a failure here yields defaults plus an error the UI
+ * surfaces — the pending migration is kept so a later reload can complete it.
+ */
+async function resolveProfile(local: LocalConfig): Promise<{ profile: Profile; error: string | null }> {
+  const ssh = local.ssh
+  const pending = configStore.pendingLegacyProfile
+  if (!ssh.host) {
+    // Nothing remote to load yet; show the old layout if we have one to migrate.
+    return { profile: pending ?? defaultProfile(), error: null }
+  }
+  try {
+    let profile = await readProfile(ssh, local.activeProfile)
+    if (!profile) {
+      // No file on the host: seed it — from the pending legacy layout if this is
+      // a migration, otherwise an empty default so the profile exists to list.
+      profile = pending ?? defaultProfile()
+      await writeProfile(ssh, local.activeProfile, profile)
+    }
+    if (pending) {
+      // Migration landed: shrink the local file so it never re-migrates.
+      configStore.clearPendingLegacy()
+      await configStore.save(local)
+    }
+    return { profile, error: null }
+  } catch (err) {
+    return { profile: defaultProfile(), error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** The full payload the renderer needs: merged config, path, profile list, error. */
+async function buildConfigResponse(): Promise<{
+  config: RipponConfig
+  path: string
+  profiles: string[]
+  error: string | null
+}> {
+  const local = configStore.current
+  const { profile, error } = await resolveProfile(local)
+  let profiles: string[] = []
+  if (local.ssh.host && !error) {
+    try {
+      profiles = await listProfiles(local.ssh)
+    } catch {
+      // Listing is a nicety; a failure here should not block the layout.
+    }
+  }
+  if (!profiles.includes(local.activeProfile)) {
+    profiles = [...profiles, local.activeProfile].sort((a, b) => a.localeCompare(b))
+  }
+  return { config: mergeConfig(local, profile), path: configStore.filePath, profiles, error }
+}
+
 function registerIpc(): void {
-  ipcMain.handle('config:get', async () => ({
-    config: await configStore.load(),
-    path: configStore.filePath
-  }))
-  ipcMain.handle('config:save', async (_e, cfg: RipponConfig) => configStore.save(cfg))
+  ipcMain.handle('config:get', async () => {
+    await configStore.load()
+    return buildConfigResponse()
+  })
+  // Re-fetch the profile from the host (e.g. the retry after it was unreachable).
+  ipcMain.handle('config:reload', () => buildConfigResponse())
+  ipcMain.handle('config:save', async (_e, cfg: RipponConfig) => {
+    const { local, profile } = splitConfig(cfg)
+    await configStore.save(local)
+    if (!local.ssh.host) return
+    try {
+      await writeProfile(local.ssh, local.activeProfile, profile)
+    } catch (err) {
+      send('app:error', `Could not save profile "${local.activeProfile}": ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+  // Persist only the connection half — used when the host changes, where pushing
+  // the current layout onto the new host's profile would clobber it.
+  ipcMain.handle('config:save-local', async (_e, ssh: SshConfig, activeProfile: string) => {
+    await configStore.save({ ...configStore.current, ssh, activeProfile })
+  })
   ipcMain.handle('config:choose-path', async () => pickConfigFile())
+
+  // Switch the active profile: persist the choice locally, load it from the host.
+  ipcMain.handle('profile:use', (_e, name: string) =>
+    attempt(async () => {
+      const local = { ...configStore.current, activeProfile: name }
+      await configStore.save(local)
+      const { profile, error } = await resolveProfile(local)
+      if (error) throw new Error(error)
+      const profiles = await listProfiles(local.ssh)
+      if (!profiles.includes(name)) profiles.push(name)
+      return { config: mergeConfig(local, profile), profiles: profiles.sort((a, b) => a.localeCompare(b)) }
+    })
+  )
+  ipcMain.handle('profile:list', () => attempt(() => listProfiles(configStore.current.ssh)))
+  ipcMain.handle('profile:create', (_e, name: string) =>
+    attempt(async () => {
+      await createProfile(configStore.current.ssh, name)
+      return listProfiles(configStore.current.ssh)
+    })
+  )
+  ipcMain.handle('profile:rename', (_e, from: string, to: string) =>
+    attempt(async () => {
+      const ssh = configStore.current.ssh
+      await renameProfile(ssh, from, to)
+      let activeProfile = configStore.current.activeProfile
+      if (activeProfile === from) {
+        activeProfile = to
+        await configStore.save({ ...configStore.current, activeProfile })
+      }
+      return { profiles: await listProfiles(ssh), activeProfile }
+    })
+  )
+  ipcMain.handle('profile:delete', (_e, name: string) =>
+    attempt(async () => {
+      if (name === configStore.current.activeProfile) {
+        throw new Error('Cannot delete the active profile. Switch to another first.')
+      }
+      await deleteProfile(configStore.current.ssh, name)
+      return listProfiles(configStore.current.ssh)
+    })
+  )
 
   ipcMain.handle('tmux:list', (_e, ssh: SshConfig) =>
     attempt<SessionInfo[]>(() => listSessions(ssh))
@@ -419,6 +556,9 @@ function registerIpc(): void {
     ptys.resize(id, cols, rows)
   )
   ipcMain.handle('pty:kill', (_e, id: string) => ptys.kill(id))
+
+  ipcMain.handle('tunnel:sync', (_e, ssh: SshConfig) => tunnels.sync(ssh))
+  ipcMain.handle('tunnel:status', () => tunnels.status())
 
   ipcMain.handle('browser:ensure', (_e, id: string, url: string) => browsers.ensure(id, url))
   ipcMain.handle('browser:destroy', (_e, id: string) => browsers.destroy(id))
@@ -451,9 +591,13 @@ function registerIpc(): void {
   ptys.on('data', (id: string, data: string) => send('pty:data', id, data))
   ptys.on('exit', (id: string, code: number) => send('pty:exit', id, code))
 
-  configStore.on('external-change', (cfg: RipponConfig) =>
-    send('config:changed', cfg, configStore.filePath)
-  )
+  tunnels.on('status', (status: TunnelStatus) => send('tunnel:status', status))
+
+  configStore.on('external-change', async (_local: LocalConfig) => {
+    const { config, profiles, error } = await buildConfigResponse()
+    send('config:changed', config, configStore.filePath, profiles)
+    if (error) send('app:error', error)
+  })
   configStore.on('error', (message: string) => send('app:error', message))
 }
 

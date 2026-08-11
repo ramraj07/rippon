@@ -27,6 +27,7 @@ import {
   MAX_COLUMNS,
   MAX_TILES,
   normalizeConfig,
+  profileNameError,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
   suggestColumns,
@@ -37,6 +38,7 @@ import {
   type SessionConfig,
   type SessionInfo,
   type SshConfig,
+  type TunnelStatus,
   type View,
   type ViewType
 } from '@shared/types'
@@ -53,6 +55,8 @@ type Dialog =
   | { kind: 'edit-view'; id: string }
   | { kind: 'fill-tiles' }
   | { kind: 'rename-bookmark'; scope: BookmarkScope; session: string; bookmark: Bookmark }
+  | { kind: 'new-profile' }
+  | { kind: 'rename-profile' }
   | null
 
 type Ctx = { x: number; y: number; items: MenuItem[] } | null
@@ -67,6 +71,8 @@ export default function App(): JSX.Element {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [ready, setReady] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
+  const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null)
+  const [profiles, setProfiles] = useState<string[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
   const [ctx, setCtx] = useState<Ctx>(null)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
@@ -421,13 +427,140 @@ export default function App(): JSX.Element {
     [commit]
   )
 
+  // ---------- profiles ----------
+
+  /** Replace the whole in-memory config without re-persisting it. */
+  const applyConfig = useCallback((next: RipponConfig) => {
+    configRef.current = next
+    setConfig(next)
+  }, [])
+
+  /** Re-fetch the active profile from the host — used to retry after it was down. */
+  const reload = useCallback(async () => {
+    const res = await window.rippon.config.reload()
+    applyConfig(res.config)
+    setProfiles(res.profiles)
+    setListError(res.error)
+    await refresh()
+  }, [applyConfig, refresh])
+
   const saveSettings = useCallback(
-    (ssh: SshConfig, detachHidden: boolean) => {
+    async (ssh: SshConfig, detachHidden: boolean) => {
       setDialog(null)
-      commit({ ...configRef.current, ssh, detachHidden })
-      void refresh()
+      const cur = configRef.current
+      const hostChanged =
+        ssh.host !== cur.ssh.host || ssh.args.join(' ') !== cur.ssh.args.join(' ')
+      if (hostChanged) {
+        // Save the connection change, then load the *new* host's profile rather
+        // than pushing this host's layout onto it. detachHidden follows the
+        // profile, so it comes from the new host, not this dialog.
+        applyConfig({ ...cur, ssh })
+        await window.rippon.config.saveLocal(ssh, cur.activeProfile)
+        await reload()
+      } else {
+        // Same host: ordinary autosave, including detachHidden into the profile.
+        commit({ ...cur, ssh, detachHidden })
+        void refresh()
+      }
     },
-    [commit, refresh]
+    [applyConfig, commit, reload, refresh]
+  )
+
+  const useProfile = useCallback(
+    async (name: string) => {
+      setCtx(null)
+      if (name === configRef.current.activeProfile) return
+      const res = await window.rippon.profile.use(name)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      setProfiles(res.value.profiles)
+      applyConfig(res.value.config)
+      setListError(null)
+      await refresh()
+    },
+    [applyConfig, refresh]
+  )
+
+  const createProfile = useCallback(
+    async (name: string) => {
+      setDialog(null)
+      const res = await window.rippon.profile.create(name)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      setProfiles(res.value)
+      await useProfile(name)
+    },
+    [useProfile]
+  )
+
+  const renameProfile = useCallback(
+    async (to: string) => {
+      setDialog(null)
+      const from = configRef.current.activeProfile
+      if (from === to) return
+      const res = await window.rippon.profile.rename(from, to)
+      if (!res.ok) {
+        setListError(res.error)
+        return
+      }
+      setProfiles(res.value.profiles)
+      applyConfig({ ...configRef.current, activeProfile: res.value.activeProfile })
+    },
+    [applyConfig]
+  )
+
+  const deleteProfile = useCallback(async (name: string) => {
+    setCtx(null)
+    const res = await window.rippon.profile.delete(name)
+    if (!res.ok) {
+      setListError(res.error)
+      return
+    }
+    setProfiles(res.value)
+  }, [])
+
+  const profileMenu = useCallback(
+    (x: number, y: number) => {
+      const cur = configRef.current
+      const others = profiles.filter((p) => p !== cur.activeProfile)
+      setCtx({
+        x,
+        y,
+        items: [
+          ...profiles.map((p) => ({
+            label: p,
+            checked: p === cur.activeProfile,
+            onClick: () => void useProfile(p)
+          })),
+          { label: 'New profile…', separator: true, onClick: () => setDialog({ kind: 'new-profile' }) },
+          { label: `Rename “${cur.activeProfile}”…`, onClick: () => setDialog({ kind: 'rename-profile' }) },
+          ...(others.length
+            ? [
+                {
+                  label: 'Delete a profile…',
+                  danger: true,
+                  onClick: () =>
+                    setCtx({
+                      x,
+                      y,
+                      items: others.map((p, i) => ({
+                        label: `Delete “${p}”`,
+                        danger: true,
+                        separator: i === 0,
+                        onClick: () => void deleteProfile(p)
+                      }))
+                    })
+                }
+              ]
+            : [])
+        ]
+      })
+    },
+    [profiles, useProfile, deleteProfile]
   )
 
   // ---------- menus ----------
@@ -498,19 +631,22 @@ export default function App(): JSX.Element {
   // ---------- effects ----------
 
   useEffect(() => {
-    void window.rippon.config.get().then(({ config: cfg, path }) => {
+    void window.rippon.config.get().then(({ config: cfg, path, profiles: profs, error }) => {
       configRef.current = cfg
       setConfig(cfg)
       setConfigPath(path)
+      setProfiles(profs)
       setReady(true)
+      if (error) setListError(error)
       if (!cfg.ssh.host) setDialog({ kind: 'settings' })
       void refresh()
     })
 
-    const offConfig = window.rippon.config.onChanged((cfg, path) => {
+    const offConfig = window.rippon.config.onChanged((cfg, path, profs) => {
       configRef.current = cfg
       setConfig(cfg)
       setConfigPath(path)
+      setProfiles(profs)
       void refresh()
     })
     const offError = window.rippon.onError(setListError)
@@ -530,6 +666,19 @@ export default function App(): JSX.Element {
       window.removeEventListener('focus', onFocus)
     }
   }, [refresh])
+
+  // Follow the tunnel forwarder's state, seeded with whatever it is doing now.
+  useEffect(() => {
+    void window.rippon.tunnel.status().then(setTunnelStatus)
+    return window.rippon.tunnel.onStatus(setTunnelStatus)
+  }, [])
+
+  // Reconcile the forwards whenever the host, flags or tunnel list changes —
+  // covers first load, a saved change, and a config edited on another machine.
+  const sshKey = JSON.stringify(config.ssh)
+  useEffect(() => {
+    void window.rippon.tunnel.sync(configRef.current.ssh)
+  }, [sshKey])
 
   useEffect(() => {
     return window.rippon.onMenu((action, payload) => {
@@ -609,6 +758,16 @@ export default function App(): JSX.Element {
     <div className="app">
       <header className="titlebar">
         <span className="wordmark">Rippon</span>
+        <button
+          className="profile-chip"
+          title={`Profile: ${config.activeProfile}\nStored on ${config.ssh.host || 'the host'} — click to switch or manage`}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            profileMenu(r.left, r.bottom + 4)
+          }}
+        >
+          {config.activeProfile} ▾
+        </button>
         <div className="viewbar">
           {config.views.map((v) => (
             <button
@@ -629,6 +788,23 @@ export default function App(): JSX.Element {
           </button>
         </div>
         <span className="spacer" />
+        {config.ssh.tunnels.length ? (
+          <button
+            className={`tunnel-chip tunnel-chip-${
+              tunnelStatus?.error ? 'error' : tunnelStatus?.running ? 'ok' : 'idle'
+            }`}
+            title={`${
+              tunnelStatus?.error
+                ? `Tunnel error: ${tunnelStatus.error}`
+                : tunnelStatus?.forwards.length
+                  ? `Forwarding:\n${tunnelStatus.forwards.join('\n')}`
+                  : 'Port forwards configured'
+            }\nClick to manage`}
+            onClick={() => setDialog({ kind: 'settings' })}
+          >
+            ⇄ {config.ssh.tunnels.length}
+          </button>
+        ) : null}
         <button
           className="host-btn"
           title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
@@ -641,7 +817,7 @@ export default function App(): JSX.Element {
       {listError ? (
         <div className="error-bar">
           <span className="error-text-body">{listError}</span>
-          <button onClick={() => void refresh()}>retry</button>
+          <button onClick={() => void reload()}>retry</button>
           <button onClick={() => setListError(null)}>×</button>
         </div>
       ) : null}
@@ -885,6 +1061,7 @@ export default function App(): JSX.Element {
           ssh={config.ssh}
           detachHidden={config.detachHidden}
           configPath={configPath}
+          tunnelStatus={tunnelStatus}
           onSave={saveSettings}
           onClose={() => setDialog(null)}
           onChoosePath={() => void window.rippon.config.choosePath()}
@@ -940,6 +1117,34 @@ export default function App(): JSX.Element {
           initialType={editingView.type}
           initialZoom={editingView.zoom}
           onSubmit={(name, type, zoom) => editView(editingView.id, name, type, zoom)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'new-profile' ? (
+        <NameDialog
+          title="New profile"
+          confirmLabel="Create"
+          label="Profile name"
+          placeholder="review"
+          validate={profileNameError}
+          takenMessage="A profile with that name already exists."
+          taken={profiles}
+          onSubmit={(name) => void createProfile(name)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'rename-profile' ? (
+        <NameDialog
+          title="Rename profile"
+          confirmLabel="Rename"
+          label="Profile name"
+          initial={config.activeProfile}
+          validate={profileNameError}
+          takenMessage="A profile with that name already exists."
+          taken={profiles}
+          onSubmit={(name) => void renameProfile(name)}
           onClose={() => setDialog(null)}
         />
       ) : null}

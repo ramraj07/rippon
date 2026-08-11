@@ -70,32 +70,75 @@ shell quoting would have to survive a trip through `ssh`.
 
 ## Config
 
-Everything lives in one JSON file, default `~/.rippon/config.json`, relocatable with `⌘⇧O` or from
-the settings modal. Point it at a synced folder to carry your layout across machines:
+Config is split in two, along the line between *connecting* and *what you see*.
+
+**The local file** — `~/.rippon/config.json`, per-machine, relocatable with `⌘⇧O`. Just enough to
+open the connection, plus which profile to load:
 
 ```jsonc
 {
-  "version": 2,
+  "version": 5,
   "ssh": {
     "host": "ubuntu@10.223.234.74",
     "args": ["-i", "/Users/you/rv-prototype-key.pem"],
-    "newSessionCommand": "claude"   // optional, runs inside each session you create
+    "newSessionCommand": "claude",  // optional, runs inside each session you create
+    "tunnels": [                     // optional local forwards (ssh -L)
+      { "localPort": 8080, "remoteHost": "localhost", "remotePort": 3000 }
+    ]
   },
-  "activeSession": "auth-refactor",
-  "hidden": ["scratch"],            // running, but no tab
-  "sessions": {
-    "auth-refactor": {
-      "url": "https://github.com/org/repo/pull/42",
-      "splitRatio": 0.5
-    }
-  }
+  "activeProfile": "default"
 }
 ```
 
-`sessions` is keyed by tmux session name and holds only local decoration — the browser URL and
-split position, written back as you browse and drag. The session list itself is never stored; it
-always comes from the host. The file is watched by polling, so a Drive/Dropbox sync that swaps the
-inode is still picked up live, and writes are atomic (write-then-rename).
+**Profiles** — `~/.rippon/profiles/<name>.json` in the SSH user's home *on the remote host*. Each
+holds the presentation: views, tab/tile layout, per-session browser URL and split ratio, bookmarks,
+`detachHidden`. This lives next to the tmux sessions it decorates, so your layout follows the box
+you work on rather than the laptop you sit at — no synced folder to set up. The SSH login is the
+boundary: anyone who can get a shell as that user is trusted with these, so they are stored plainly
+in that user's home.
+
+```jsonc
+// ~/.rippon/profiles/default.json, on the host
+{
+  "version": 5,
+  "detachHidden": false,
+  "views": [ /* … */ ],
+  "activeViewId": "view-main",
+  "sessions": {                       // keyed by tmux session name — decoration only
+    "auth-refactor": { "url": "https://github.com/org/repo/pull/42", "splitRatio": 0.5 }
+  },
+  "bookmarks": [ /* … */ ]
+}
+```
+
+Switch, create, rename or delete profiles from the **`<name> ▾`** chip in the title bar. Different
+people (or the same person, different tasks) sharing one SSH login just pick different profiles.
+
+Because the presentation is remote, **startup waits on the connection** — there is no local copy to
+fall back on. If the host is unreachable you get an error bar with a retry; the layout appears once
+it connects. Profile reads/writes ride the same multiplexed connection as everything else (writes
+are atomic: temp file then rename), and the local file is watched by polling so a Drive/Dropbox sync
+that swaps the inode is still picked up live.
+
+An older single-file config (v1–v4, everything local) is migrated automatically the first time it
+connects: the presentation is lifted up to a `default` profile on the host, and the local file
+shrinks to the shape above. Nothing is written remotely until that first successful connection, so a
+failed or offline migration never loses your layout.
+
+## Port forwards
+
+The settings modal has a **Port forwards** section for local forwarding (`ssh -L`): a port on the
+remote host, republished on `localhost` here. A dev server bound to the box's own `:3000` becomes
+`localhost:8080` on your machine — open it in a browser pane like any other URL.
+
+Each row is `local port → remote host : remote port`; the remote host is almost always `localhost`
+(resolved on the box), so the whole tunnel means "reach *that* port over the SSH connection". Local
+ports must be unique. A `⇄` chip in the title bar shows the live state — green when connected, red
+with the ssh error when a port is already in use or the host is unreachable.
+
+The forwards are held by one background `ssh -N` that rides the same multiplexed connection as the
+tabs, so they cost no extra auth prompt and come up as soon as a host is set. Like the host itself,
+they live in the local file (they are part of *connecting*, not a profile).
 
 ## SSH
 
@@ -104,8 +147,8 @@ Yubikey/1Password agents and interactive MFA all work as they do in a normal ter
 credentials are stored by the app.
 
 All invocations share one multiplexed connection (`ControlMaster=auto`, socket under `~/.rippon/`,
-`ControlPersist=120`), so the frequent list/create/kill calls cost no handshake and no second round
-of auth prompts.
+`ControlPersist=120`), so the frequent list/create/kill calls and the port-forward connection cost
+no handshake and no second round of auth prompts.
 
 One caveat: those control calls have no TTY. If the host key is unknown or your key needs an
 interactive passphrase with no agent loaded, they fail with the ssh error shown in the app's error
@@ -133,8 +176,9 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 
 ```
 src/
-  main/       Electron main — window, menus, config store, tmux-over-ssh, PTY manager
+  main/       Electron main — window, menus, local config store, remote profile
+              store, tmux-over-ssh, PTY manager, port-forward manager
   preload/    contextBridge API surface (window.rippon)
   renderer/   React UI — tab strip, terminal pane, browser pane, dialogs
-  shared/     config types + normalization, used by both sides
+  shared/     config types + normalization + local/profile split, both sides
 ```
