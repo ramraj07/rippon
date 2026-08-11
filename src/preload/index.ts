@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { BrowserState, RipponConfig, SessionInfo, SshConfig, TunnelStatus } from '../shared/types'
+import type {
+  BrowserState,
+  FindMatches,
+  RipponConfig,
+  SessionInfo,
+  SshConfig,
+  TunnelStatus
+} from '../shared/types'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface Bounds {
@@ -83,6 +90,13 @@ const api = {
     reload: (id: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
     stop: (id: string): Promise<void> => ipcRenderer.invoke('browser:stop', id),
     focus: (id: string): Promise<void> => ipcRenderer.invoke('browser:focus', id),
+    find: (id: string, query: string, forward: boolean): Promise<void> =>
+      ipcRenderer.invoke('browser:find', id, query, forward),
+    findStop: (id: string): Promise<void> => ipcRenderer.invoke('browser:find-stop', id),
+    onFound: (cb: (id: string, matches: FindMatches) => void) =>
+      on<[string, FindMatches]>('browser:found', cb),
+    /** The view took keyboard focus. Nothing in the renderer can observe this. */
+    onFocused: (cb: (id: string) => void) => on<[string]>('browser:focused', cb),
     onState: (cb: (id: string, state: BrowserState) => void) =>
       on<[string, BrowserState]>('browser:state', cb)
   },
@@ -106,7 +120,9 @@ const api = {
       'menu:reload-browser',
       'menu:reconnect-ssh',
       'menu:cycle-tab',
-      'menu:select-tab-index'
+      'menu:select-tab-index',
+      'menu:find',
+      'menu:find-step'
     ]
     const offs = channels.map((c) => on<[unknown]>(c, (payload) => cb(c, payload)))
     return () => offs.forEach((off) => off())

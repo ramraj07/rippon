@@ -79,6 +79,15 @@ export default function App(): JSX.Element {
 
   const terminals = useRef(new Map<string, TerminalHandle | null>())
   const browsers = useRef(new Map<string, BrowserHandle | null>())
+  /**
+   * Which half of the tab last held the keyboard, so ⌘F searches the pane the
+   * user is actually looking at. A native browser view takes focus without the
+   * renderer seeing any event, so the main process reports that side for us.
+   */
+  const focusedPane = useRef<'terminal' | 'browser'>('terminal')
+  const noteTerminalFocus = useCallback(() => {
+    focusedPane.current = 'terminal'
+  }, [])
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Mirrors `config` for use inside stable callbacks and menu handlers. */
   const configRef = useRef(config)
@@ -681,8 +690,23 @@ export default function App(): JSX.Element {
   }, [sshKey])
 
   useEffect(() => {
+    return window.rippon.browser.onFocused(() => {
+      focusedPane.current = 'browser'
+    })
+  }, [])
+
+  useEffect(() => {
     return window.rippon.onMenu((action, payload) => {
       const name = activeName
+
+      /** The pane ⌘F applies to: whichever last had focus, if it is still there. */
+      const findable = (): TerminalHandle | BrowserHandle | null => {
+        if (!name) return null
+        const browser = browsers.current.get(name) ?? null
+        if (focusedPane.current === 'browser' && browser) return browser
+        return terminals.current.get(name) ?? browser
+      }
+
       switch (action) {
         case 'menu:new-session':
           return setDialog({ kind: 'new-session' })
@@ -726,6 +750,10 @@ export default function App(): JSX.Element {
           return name ? browsers.current.get(name)?.reload() : undefined
         case 'menu:reconnect-ssh':
           return name ? terminals.current.get(name)?.reattach() : undefined
+        case 'menu:find':
+          return findable()?.openFind()
+        case 'menu:find-step':
+          return findable()?.stepFind(payload === -1 ? -1 : 1)
       }
     })
   }, [activeName, indexed, refresh, selectSession, selectView, updateView])
@@ -1021,6 +1049,7 @@ export default function App(): JSX.Element {
                 onRename={() => setDialog({ kind: 'rename-session', name: s.name })}
                 onContextMenu={(x, y) => sessionMenu(s.name, x, y)}
                 onTerminalMenu={terminalMenu}
+                onTerminalFocus={noteTerminalFocus}
               />
             )
           })}
@@ -1197,6 +1226,7 @@ interface SessionPaneProps {
   onRename(): void
   onContextMenu(x: number, y: number): void
   onTerminalMenu(name: string, x: number, y: number, items: MenuItem[]): void
+  onTerminalFocus(name: string): void
   showBookmarks: boolean
   globalBookmarks: Bookmark[]
   onEditBookmarks(scope: BookmarkScope, name: string, fn: (list: Bookmark[]) => Bookmark[]): void
@@ -1223,6 +1253,7 @@ function SessionPane({
   onRename,
   onContextMenu,
   onTerminalMenu,
+  onTerminalFocus,
   showBookmarks,
   globalBookmarks,
   onEditBookmarks,
@@ -1318,6 +1349,7 @@ function SessionPane({
             onOpenUrl={openUrl}
             onRename={onRename}
             onOpenBrowser={() => onUpdate(name, { showBrowser: true })}
+            onFocus={() => onTerminalFocus(name)}
             onContextMenu={(x, y, items) => onTerminalMenu(name, x, y, items)}
           />
         </div>

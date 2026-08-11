@@ -3,12 +3,19 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import type { MenuItem } from './Dialogs'
-import type { SessionInfo, SshConfig } from '@shared/types'
+import FindBar, { type FindHandle } from './FindBar'
+import type { FindMatches, SessionInfo, SshConfig } from '@shared/types'
+
+const NO_MATCHES: FindMatches = { active: 0, total: 0 }
 
 export interface TerminalHandle {
   focus(): void
   reattach(): void
+  openFind(): void
+  /** Advance the open search. Opens the bar if ⌘G was pressed cold. */
+  stepFind(delta: 1 | -1): void
 }
 
 interface Props {
@@ -24,6 +31,8 @@ interface Props {
   onOpenUrl(url: string): void
   onRename(): void
   onOpenBrowser(): void
+  /** Reported so ⌘F knows this pane, not the browser, is where the caret is. */
+  onFocus(): void
   /**
    * Raised to the app rather than rendered here: a native browser view paints
    * above the page, so any menu has to be one the app knows to hide behind.
@@ -47,6 +56,23 @@ const THEME = {
   brightBlack: '#414868'
 }
 
+/**
+ * Every match is tinted like a selection; the current one is picked out in the
+ * cursor blue. The overview-ruler entries put a mark on the scrollbar for each
+ * hit, which is the only way to see matches that are off-screen in 10k lines of
+ * scrollback.
+ */
+const SEARCH_OPTIONS: ISearchOptions = {
+  decorations: {
+    matchBackground: '#2a3050',
+    matchBorder: '#414868',
+    matchOverviewRuler: '#414868',
+    activeMatchBackground: '#3b5aa6',
+    activeMatchBorder: '#7aa2f7',
+    activeMatchColorOverviewRuler: '#7aa2f7'
+  }
+}
+
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   {
     session,
@@ -58,6 +84,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     onOpenUrl,
     onRename,
     onOpenBrowser,
+    onFocus,
     onContextMenu
   },
   ref
@@ -66,6 +93,12 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const searchRef = useRef<SearchAddon | null>(null)
+  const findRef = useRef<FindHandle>(null)
+  const [finding, setFinding] = useState(false)
+  const [matches, setMatches] = useState<FindMatches>(NO_MATCHES)
+  /** Last query, so ⌘G can step without the bar re-sending it. */
+  const queryRef = useRef('')
   const [status, setStatus] = useState<'idle' | 'attached' | 'detached'>('idle')
   /** Set when we drop the client on purpose, so the exit is not reported as a drop. */
   const backgroundDetach = useRef(false)
@@ -75,6 +108,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   openUrlRef.current = onOpenUrl
   const sshRef = useRef(ssh)
   sshRef.current = ssh
+  const onFocusRef = useRef(onFocus)
+  onFocusRef.current = onFocus
 
   function attach(): void {
     const term = termRef.current
@@ -90,6 +125,26 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     setStatus('attached')
   }
 
+  function step(delta: 1 | -1): void {
+    const search = searchRef.current
+    const query = queryRef.current
+    if (!search || !query) return
+    if (delta > 0) search.findNext(query, SEARCH_OPTIONS)
+    else search.findPrevious(query, SEARCH_OPTIONS)
+  }
+
+  function openFind(): void {
+    setFinding(true)
+    /*
+     * Seed from the selection, as a browser does — but only a single line of
+     * it. A multi-line drag is someone copying output, not naming a search.
+     */
+    const selection = termRef.current?.getSelection() ?? ''
+    const seed = selection.includes('\n') ? '' : selection.trim()
+    // A browser view may hold the keyboard; take it back before focusing.
+    void window.rippon.focusPage().then(() => findRef.current?.focus(seed || undefined))
+  }
+
   useImperativeHandle(ref, () => ({
     focus: () => {
       // A browser view may hold keyboard focus; take it back first.
@@ -99,6 +154,14 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       termRef.current?.reset()
       void window.rippon.pty.kill(id)
       attach()
+    },
+    openFind,
+    stepFind: (delta) => {
+      if (!queryRef.current) {
+        openFind()
+        return
+      }
+      step(delta)
     }
   }))
 
@@ -131,6 +194,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    const search = new SearchAddon()
+    term.loadAddon(search)
     // Plain-text URLs printed to stdout.
     term.loadAddon(new WebLinksAddon((_event, uri) => openUrlRef.current(uri)))
     term.open(host)
@@ -154,6 +219,15 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
 
     termRef.current = term
     fitRef.current = fit
+    searchRef.current = search
+
+    // resultIndex is -1 when nothing matched; the bar counts from 1.
+    const onResults = search.onDidChangeResults(({ resultIndex, resultCount }) =>
+      setMatches({ active: resultIndex + 1, total: resultCount })
+    )
+    // xterm's real keyboard target is the hidden textarea, not the host div.
+    const onTermFocus = (): void => onFocusRef.current()
+    term.textarea?.addEventListener('focus', onTermFocus)
     // Debug handle: lets the main process inspect selection state. See
     // RIPPON_DEBUG_SELECT in src/main/index.ts.
     const debug = (window as unknown as { __rippon_terminals?: Map<string, Terminal> })
@@ -194,6 +268,9 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       offData()
       offExit()
       onDataDisposable.dispose()
+      onResults.dispose()
+      term.textarea?.removeEventListener('focus', onTermFocus)
+      searchRef.current = null
       /*
        * The WebGL addon goes first and on its own: letting Terminal.dispose()
        * tear it down reaches for render services the terminal has already
@@ -294,6 +371,33 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
           ⟳
         </button>
       </div>
+      {finding ? (
+        <FindBar
+          ref={findRef}
+          matches={matches}
+          onQuery={(query) => {
+            queryRef.current = query
+            const search = searchRef.current
+            if (!search) return
+            if (!query) {
+              search.clearDecorations()
+              setMatches(NO_MATCHES)
+              return
+            }
+            // Incremental, so typing extends the match under the cursor rather
+            // than jumping to the next one on every keystroke.
+            search.findNext(query, { ...SEARCH_OPTIONS, incremental: true })
+          }}
+          onStep={step}
+          onClose={() => {
+            setFinding(false)
+            setMatches(NO_MATCHES)
+            queryRef.current = ''
+            searchRef.current?.clearDecorations()
+            termRef.current?.focus()
+          }}
+        />
+      ) : null}
       <div
         className="terminal-host"
         ref={hostRef}

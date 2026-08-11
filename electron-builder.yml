@@ -23,9 +23,12 @@ mac:
       arch: [arm64]
     - target: zip
       arch: [arm64]
-  # Unsigned: this is a personal build, and signing needs a paid Developer ID.
-  # See the README for the one-time Gatekeeper step on a new machine.
+  # No Developer ID: that needs a paid account. This skips signing altogether,
+  # which leaves the bundle carrying Electron's own stale signature — so
+  # afterPack ad-hoc signs it. See scripts/adhoc-sign.js for why that matters.
   identity: null
+
+afterPack: scripts/adhoc-sign.js
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}

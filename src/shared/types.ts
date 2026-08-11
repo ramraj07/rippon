@@ -175,6 +175,16 @@ export interface BrowserState {
   crashed: string | null
 }
 
+/**
+ * How a search is going, in a browser pane or a terminal. Both panes report the
+ * same shape so one find bar can render either.
+ */
+export interface FindMatches {
+  /** 1-based position of the highlighted match, or 0 when nothing matched. */
+  active: number
+  total: number
+}
+
 /** A tmux session as reported by the remote host. */
 export interface SessionInfo {
   name: string

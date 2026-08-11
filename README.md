@@ -34,13 +34,22 @@ npm run dist:dir    # unpacked release/mac-arm64/Rippon.app, for a quick check
 Targets Apple Silicon. `node-pty` is native, so it is unpacked from the asar
 archive; everything else is bundled.
 
-The build is **unsigned** — signing needs a paid Developer ID. On this machine it
-just opens. On another Mac, Gatekeeper will refuse it once; clear the quarantine
-flag after copying:
+The build is **ad-hoc signed, not notarized** — a Developer ID needs a paid
+account. On this machine it just opens. On another Mac, Gatekeeper refuses it
+once with "unidentified developer"; either right-click → Open, allow it under
+System Settings → Privacy & Security, or clear the quarantine flag after
+copying:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Rippon.app
 ```
+
+The ad-hoc signature is what keeps that dialog recoverable. `identity: null`
+alone leaves the bundle carrying Electron's own signature, which seals none of
+our files — and macOS refuses a *broken* signature far more harshly than a
+missing one, with "Rippon is damaged and can't be opened" and no way past it in
+the UI. `scripts/adhoc-sign.js` re-signs the bundle from `afterPack` and fails
+the build if verification does not pass.
 
 Packaged and dev runs share one profile (`~/Library/Application Support/rippon`),
 so a browser login done in either applies to both.
@@ -167,6 +176,8 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 | `⌘⇧L` | refresh session list now |
 | `⌘L` | focus the address bar |
 | `⌘J` | focus the terminal |
+| `⌘F` | find in the pane you were last in — page text, or terminal scrollback |
+| `⌘G` / `⌘⇧G` | next / previous match |
 | `⌘R` | reload the browser pane |
 | `⌘⇧R` | reattach the session |
 | `⌘,` | SSH settings |

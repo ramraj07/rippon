@@ -791,6 +791,55 @@ body {
   border-color: var(--accent);
 }
 
+/* ---------- find bar ---------- */
+
+/*
+ * In flow rather than floating over the content: a browser pane's native view
+ * paints above the page, so an overlay here would be hidden behind it.
+ */
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  background: #1b1e24;
+  border-bottom: 1px solid var(--border);
+}
+
+.find-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  user-select: text;
+  outline: none;
+}
+
+.find-input:focus {
+  border-color: var(--accent);
+}
+
+.find-count {
+  flex: 0 0 auto;
+  min-width: 72px;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+.find-count-none {
+  color: var(--danger, #f7768e);
+  opacity: 0.9;
+}
+
 .crash-screen {
   display: flex;
   flex-direction: column;
