@@ -50,6 +50,64 @@ body {
   -webkit-app-region: drag;
 }
 
+.wordmark {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  padding-right: 4px;
+  opacity: 0.85;
+}
+
+/* ---------- bookmarks ---------- */
+
+.bookmark-bar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  background: #1b1e24;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.bookmark-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.bookmark {
+  flex: 0 0 auto;
+  max-width: 180px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bookmark:hover {
+  background: #262b33;
+  color: var(--text);
+}
+
+/* Session bookmarks are marked so the shared set stays distinguishable. */
+.bookmark-session {
+  border-left: 2px solid var(--accent);
+  border-radius: 2px 5px 5px 2px;
+}
+
+.icon-btn-on {
+  color: #e0af68;
+}
+
 /* ---------- views ---------- */
 
 .viewbar {

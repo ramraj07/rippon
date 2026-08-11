@@ -73,6 +73,66 @@ export function NameDialog({
   )
 }
 
+interface TextDialogProps {
+  title: string
+  label: string
+  confirmLabel: string
+  initial?: string
+  onSubmit(value: string): void
+  onClose(): void
+}
+
+/** Plain single-field prompt, for names with no rules to enforce. */
+export function TextDialog({
+  title,
+  label,
+  confirmLabel,
+  initial = '',
+  onSubmit,
+  onClose
+}: TextDialogProps): JSX.Element {
+  const [value, setValue] = useState(initial)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form
+        className="modal modal-narrow"
+        onMouseDown={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (value.trim()) onSubmit(value.trim())
+        }}
+      >
+        <h2>{title}</h2>
+        <label>
+          {label}
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && onClose()}
+          />
+        </label>
+        <div className="modal-actions">
+          <span className="spacer" />
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={!value.trim()}>
+            {confirmLabel}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 interface ViewDialogProps {
   title: string
   confirmLabel: string

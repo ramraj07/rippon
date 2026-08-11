@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { BrowserState } from '@shared/types'
+import { bookmarkLabel, type Bookmark, type BookmarkScope, type BrowserState } from '@shared/types'
+import type { MenuItem } from './Dialogs'
 
 export interface BrowserHandle {
   navigate(url: string): void
@@ -19,8 +20,17 @@ interface Props {
   suppressed: boolean
   /** The active view's zoom. Re-applied on navigation, since it lives per origin. */
   zoom: number
+  /** Hidden in tiled views, where a tile has no room to spare. */
+  showBookmarks: boolean
+  globalBookmarks: Bookmark[]
+  sessionBookmarks: Bookmark[]
   onUrlChange(url: string): void
   onClose(): void
+  onBookmarkAdd(scope: BookmarkScope, bookmark: Bookmark): void
+  onBookmarkRemove(scope: BookmarkScope, url: string): void
+  onBookmarkRename(scope: BookmarkScope, bookmark: Bookmark): void
+  /** Raised to the app so native browser views hide behind the menu. */
+  onContextMenu(x: number, y: number, items: MenuItem[]): void
 }
 
 /** Turn whatever the user typed into something loadable. */
@@ -71,7 +81,22 @@ function clippedRect(slot: HTMLElement): { x: number; y: number; width: number; 
 }
 
 const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
-  { id, url, active, suppressed, zoom, onUrlChange, onClose },
+  {
+    id,
+    url,
+    active,
+    suppressed,
+    zoom,
+    showBookmarks,
+    globalBookmarks,
+    sessionBookmarks,
+    onUrlChange,
+    onClose,
+    onBookmarkAdd,
+    onBookmarkRemove,
+    onBookmarkRename,
+    onContextMenu
+  },
   ref
 ) {
   const slotRef = useRef<HTMLDivElement>(null)
@@ -199,6 +224,15 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
   }, [id, url])
 
   const loading = state?.loading ?? false
+  const here = currentUrlRef.current
+  const inSession = sessionBookmarks.some((b) => b.url === here)
+  const inGlobal = globalBookmarks.some((b) => b.url === here)
+  // Session bookmarks sit after the global ones, so the shared set stays put.
+  const savedScope: BookmarkScope | null = inSession ? 'session' : inGlobal ? 'global' : null
+  const bookmarkBar = [
+    ...globalBookmarks.map((bookmark) => ({ scope: 'global' as const, bookmark })),
+    ...sessionBookmarks.map((bookmark) => ({ scope: 'session' as const, bookmark }))
+  ]
 
   return (
     <div className="pane browser-pane">
@@ -260,10 +294,73 @@ const BrowserPane = forwardRef<BrowserHandle, Props>(function BrowserPane(
         >
           ↗
         </button>
+        <button
+          className={`icon-btn ${savedScope ? 'icon-btn-on' : ''}`}
+          title={
+            savedScope === 'session'
+              ? 'Bookmarked for this session'
+              : savedScope === 'global'
+                ? 'Bookmarked everywhere'
+                : 'Bookmark this page'
+          }
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            const here: Bookmark = {
+              url: currentUrlRef.current,
+              title: state?.title || bookmarkLabel(currentUrlRef.current)
+            }
+            onContextMenu(Math.max(0, r.right - 220), r.bottom + 4, [
+              {
+                label: inSession ? 'Remove from this session' : 'Bookmark for this session',
+                checked: inSession,
+                onClick: () =>
+                  inSession
+                    ? onBookmarkRemove('session', here.url)
+                    : onBookmarkAdd('session', here)
+              },
+              {
+                label: inGlobal ? 'Remove from all sessions' : 'Bookmark for all sessions',
+                checked: inGlobal,
+                onClick: () =>
+                  inGlobal ? onBookmarkRemove('global', here.url) : onBookmarkAdd('global', here)
+              }
+            ])
+          }}
+        >
+          {savedScope ? '★' : '☆'}
+        </button>
         <button className="icon-btn" title="Close browser pane" onClick={onClose}>
           ×
         </button>
       </div>
+
+      {showBookmarks && bookmarkBar.length ? (
+        <div className="bookmark-bar">
+          {bookmarkBar.map(({ scope, bookmark }) => (
+            <button
+              key={`${scope}:${bookmark.url}`}
+              className={`bookmark ${scope === 'session' ? 'bookmark-session' : ''}`}
+              title={`${bookmark.url}\n${
+                scope === 'session' ? 'This session only' : 'All sessions'
+              } — right-click to rename or remove`}
+              onClick={() => navigate(bookmark.url)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                onContextMenu(e.clientX, e.clientY, [
+                  { label: 'Rename…', onClick: () => onBookmarkRename(scope, bookmark) },
+                  {
+                    label: 'Remove',
+                    danger: true,
+                    onClick: () => onBookmarkRemove(scope, bookmark.url)
+                  }
+                ])
+              }}
+            >
+              {bookmark.title}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {state?.crashed || state?.hung ? (
         <div className="hung-bar">
           {state.crashed

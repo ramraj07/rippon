@@ -9,12 +9,22 @@ export interface SshConfig {
   newSessionCommand?: string
 }
 
+/** A saved page. Lives either on one session or on the config as a whole. */
+export interface Bookmark {
+  title: string
+  url: string
+}
+
+export type BookmarkScope = 'global' | 'session'
+
 /** Local decoration for a tmux session, keyed by session name. Shared by all views. */
 export interface SessionConfig {
   url: string
   splitRatio: number
   /** Whether the browser pane is open. Off until asked for — see defaultSession. */
   showBrowser: boolean
+  /** Pages saved for this session only — its PR, its dashboard. */
+  bookmarks: Bookmark[]
 }
 
 export type ViewType = 'tabs-horizontal' | 'tabs-vertical' | 'tiled'
@@ -66,6 +76,8 @@ export interface RipponConfig {
   views: View[]
   activeViewId?: string
   sessions: Record<string, SessionConfig>
+  /** Pages saved for every session. */
+  bookmarks: Bookmark[]
 }
 
 /** Navigation state of a browser pane, pushed from the main process. */
@@ -127,7 +139,8 @@ export function defaultConfig(): RipponConfig {
     detachHidden: false,
     views: [defaultView('view-main')],
     activeViewId: 'view-main',
-    sessions: {}
+    sessions: {},
+    bookmarks: []
   }
 }
 
@@ -136,7 +149,32 @@ export function defaultConfig(): RipponConfig {
  * renderer process each, so it is opened per session rather than by default.
  */
 export function defaultSession(): SessionConfig {
-  return { url: DEFAULT_URL, splitRatio: 0.5, showBrowser: false }
+  return { url: DEFAULT_URL, splitRatio: 0.5, showBrowser: false, bookmarks: [] }
+}
+
+function normalizeBookmarks(raw: unknown): Bookmark[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: Bookmark[] = []
+  for (const b of raw) {
+    if (!b || typeof b !== 'object') continue
+    const { url, title } = b as Partial<Bookmark>
+    if (typeof url !== 'string' || !/^https?:/i.test(url) || seen.has(url)) continue
+    seen.add(url)
+    out.push({ url, title: typeof title === 'string' && title ? title : bookmarkLabel(url) })
+  }
+  return out
+}
+
+/** Something short and recognisable when a page gives us no usable title. */
+export function bookmarkLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const tail = u.pathname.split('/').filter(Boolean).pop()
+    return tail ? `${u.hostname.replace(/^www\./, '')}/${tail}` : u.hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
 }
 
 /**
@@ -217,11 +255,13 @@ export function normalizeConfig(raw: unknown): RipponConfig {
       url: typeof s.url === 'string' ? s.url : DEFAULT_URL,
       splitRatio:
         typeof s.splitRatio === 'number' ? Math.min(0.85, Math.max(0.15, s.splitRatio)) : 0.5,
-      showBrowser: s.showBrowser === true
+      showBrowser: s.showBrowser === true,
+      bookmarks: normalizeBookmarks(s.bookmarks)
     }
   }
 
   out.detachHidden = cfg.detachHidden === true
+  out.bookmarks = normalizeBookmarks(cfg.bookmarks)
 
   if (Array.isArray(cfg.views) && cfg.views.length) {
     out.views = cfg.views.map(normalizeView)

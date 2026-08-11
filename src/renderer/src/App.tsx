@@ -16,6 +16,7 @@ import {
   ColumnsDialog,
   ContextMenu,
   NameDialog,
+  TextDialog,
   ViewDialog,
   type MenuItem
 } from './Dialogs'
@@ -30,6 +31,8 @@ import {
   SIDEBAR_MIN,
   suggestColumns,
   VIEW_TYPE_LABELS,
+  type Bookmark,
+  type BookmarkScope,
   type RipponConfig,
   type SessionConfig,
   type SessionInfo,
@@ -49,6 +52,7 @@ type Dialog =
   | { kind: 'new-view' }
   | { kind: 'edit-view'; id: string }
   | { kind: 'fill-tiles' }
+  | { kind: 'rename-bookmark'; scope: BookmarkScope; session: string; bookmark: Bookmark }
   | null
 
 type Ctx = { x: number; y: number; items: MenuItem[] } | null
@@ -400,6 +404,23 @@ export default function App(): JSX.Element {
     window.addEventListener('pointerup', up)
   }
 
+  /** Global bookmarks live on the config; session ones on that session. */
+  const editBookmarks = useCallback(
+    (scope: BookmarkScope, name: string, fn: (list: Bookmark[]) => Bookmark[]) => {
+      const cur = configRef.current
+      if (scope === 'global') {
+        commit({ ...cur, bookmarks: fn(cur.bookmarks) })
+        return
+      }
+      const existing = cur.sessions[name] ?? defaultSession()
+      commit({
+        ...cur,
+        sessions: { ...cur.sessions, [name]: { ...existing, bookmarks: fn(existing.bookmarks) } }
+      })
+    },
+    [commit]
+  )
+
   const saveSettings = useCallback(
     (ssh: SshConfig, detachHidden: boolean) => {
       setDialog(null)
@@ -587,6 +608,7 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <header className="titlebar">
+        <span className="wordmark">Rippon</span>
         <div className="viewbar">
           {config.views.map((v) => (
             <button
@@ -799,6 +821,13 @@ export default function App(): JSX.Element {
                 focusOnShow={!tiled}
                 detachHidden={config.detachHidden}
                 settings={config.sessions[s.name] ?? defaultSession()}
+                showBookmarks={!tiled}
+                globalBookmarks={config.bookmarks}
+                onEditBookmarks={editBookmarks}
+                onRenameBookmark={(scope, bookmark) =>
+                  setDialog({ kind: 'rename-bookmark', scope, session: s.name, bookmark })
+                }
+                onBrowserMenu={(x, y, items) => setCtx({ x, y, items })}
                 terminals={terminals.current}
                 browsers={browsers.current}
                 style={tiled && tileIndex >= 0 ? tilePosition(tileIndex) : undefined}
@@ -915,6 +944,22 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
+      {dialog?.kind === 'rename-bookmark' ? (
+        <TextDialog
+          title="Rename bookmark"
+          label="Name"
+          confirmLabel="Save"
+          initial={dialog.bookmark.title}
+          onSubmit={(title) => {
+            editBookmarks(dialog.scope, dialog.session, (list) =>
+              list.map((b) => (b.url === dialog.bookmark.url ? { ...b, title } : b))
+            )
+            setDialog(null)
+          }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
       {dialog?.kind === 'fill-tiles' ? (
         <ColumnsDialog
           count={sessions.length}
@@ -947,6 +992,11 @@ interface SessionPaneProps {
   onRename(): void
   onContextMenu(x: number, y: number): void
   onTerminalMenu(name: string, x: number, y: number, items: MenuItem[]): void
+  showBookmarks: boolean
+  globalBookmarks: Bookmark[]
+  onEditBookmarks(scope: BookmarkScope, name: string, fn: (list: Bookmark[]) => Bookmark[]): void
+  onRenameBookmark(scope: BookmarkScope, bookmark: Bookmark): void
+  onBrowserMenu(x: number, y: number, items: MenuItem[]): void
 }
 
 function SessionPane({
@@ -967,7 +1017,12 @@ function SessionPane({
   onUpdate,
   onRename,
   onContextMenu,
-  onTerminalMenu
+  onTerminalMenu,
+  showBookmarks,
+  globalBookmarks,
+  onEditBookmarks,
+  onRenameBookmark,
+  onBrowserMenu
 }: SessionPaneProps): JSX.Element {
   const splitRef = useRef<HTMLDivElement>(null)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
@@ -1074,8 +1129,21 @@ function SessionPane({
                 active={visible}
                 suppressed={suppressed}
                 zoom={zoom}
+                showBookmarks={showBookmarks}
+                globalBookmarks={globalBookmarks}
+                sessionBookmarks={settings.bookmarks}
                 onUrlChange={onUrlChange}
                 onClose={() => onUpdate(name, { showBrowser: false })}
+                onBookmarkAdd={(scope, bookmark) =>
+                  onEditBookmarks(scope, name, (list) =>
+                    list.some((b) => b.url === bookmark.url) ? list : [...list, bookmark]
+                  )
+                }
+                onBookmarkRemove={(scope, bookmarkUrl) =>
+                  onEditBookmarks(scope, name, (list) => list.filter((b) => b.url !== bookmarkUrl))
+                }
+                onBookmarkRename={onRenameBookmark}
+                onContextMenu={onBrowserMenu}
               />
             </div>
           </>
