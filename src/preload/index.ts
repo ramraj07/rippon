@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { BrowserState, RipponConfig, SessionInfo, SshConfig } from '../shared/types'
+import type { BrowserState, RipponConfig, SessionInfo, SshConfig, TunnelStatus } from '../shared/types'
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface Bounds {
@@ -15,13 +15,34 @@ function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () 
   return () => ipcRenderer.off(channel, listener)
 }
 
+interface ConfigPayload {
+  config: RipponConfig
+  path: string
+  /** Profile names available on the host. */
+  profiles: string[]
+  /** Non-null when the active profile could not be loaded (host unreachable, etc). */
+  error: string | null
+}
+
 const api = {
   config: {
-    get: (): Promise<{ config: RipponConfig; path: string }> => ipcRenderer.invoke('config:get'),
+    get: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:get'),
+    reload: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:reload'),
     save: (cfg: RipponConfig): Promise<void> => ipcRenderer.invoke('config:save', cfg),
+    saveLocal: (ssh: SshConfig, activeProfile: string): Promise<void> =>
+      ipcRenderer.invoke('config:save-local', ssh, activeProfile),
     choosePath: (): Promise<void> => ipcRenderer.invoke('config:choose-path'),
-    onChanged: (cb: (cfg: RipponConfig, path: string) => void) =>
-      on<[RipponConfig, string]>('config:changed', cb)
+    onChanged: (cb: (cfg: RipponConfig, path: string, profiles: string[]) => void) =>
+      on<[RipponConfig, string, string[]]>('config:changed', cb)
+  },
+  profile: {
+    use: (name: string): Promise<Result<{ config: RipponConfig; profiles: string[] }>> =>
+      ipcRenderer.invoke('profile:use', name),
+    list: (): Promise<Result<string[]>> => ipcRenderer.invoke('profile:list'),
+    create: (name: string): Promise<Result<string[]>> => ipcRenderer.invoke('profile:create', name),
+    rename: (from: string, to: string): Promise<Result<{ profiles: string[]; activeProfile: string }>> =>
+      ipcRenderer.invoke('profile:rename', from, to),
+    delete: (name: string): Promise<Result<string[]>> => ipcRenderer.invoke('profile:delete', name)
   },
   tmux: {
     list: (ssh: SshConfig): Promise<Result<SessionInfo[]>> => ipcRenderer.invoke('tmux:list', ssh),
@@ -41,6 +62,11 @@ const api = {
     kill: (id: string): Promise<void> => ipcRenderer.invoke('pty:kill', id),
     onData: (cb: (id: string, data: string) => void) => on<[string, string]>('pty:data', cb),
     onExit: (cb: (id: string, code: number) => void) => on<[string, number]>('pty:exit', cb)
+  },
+  tunnel: {
+    sync: (ssh: SshConfig): Promise<void> => ipcRenderer.invoke('tunnel:sync', ssh),
+    status: (): Promise<TunnelStatus> => ipcRenderer.invoke('tunnel:status'),
+    onStatus: (cb: (status: TunnelStatus) => void) => on<[TunnelStatus]>('tunnel:status', cb)
   },
   browser: {
     ensure: (id: string, url: string): Promise<void> =>

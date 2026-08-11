@@ -12,16 +12,25 @@ interface NameDialogProps {
   confirmLabel: string
   initial?: string
   taken: string[]
+  /** What kind of name this is — defaults to a tmux session. */
+  label?: string
+  placeholder?: string
+  validate?: (name: string) => string | null
+  takenMessage?: string
   onSubmit(name: string): void
   onClose(): void
 }
 
-/** Used for both "new session" and "rename session". */
+/** Used for new/rename of sessions and profiles — same name rules, different noun. */
 export function NameDialog({
   title,
   confirmLabel,
   initial = '',
   taken,
+  label = 'Session name',
+  placeholder = 'auth-refactor',
+  validate = sessionNameError,
+  takenMessage = 'A session with that name already exists.',
   onSubmit,
   onClose
 }: NameDialogProps): JSX.Element {
@@ -34,8 +43,7 @@ export function NameDialog({
   }, [])
 
   const error =
-    sessionNameError(name) ??
-    (name !== initial && taken.includes(name) ? 'A session with that name already exists.' : null)
+    validate(name) ?? (name !== initial && taken.includes(name) ? takenMessage : null)
 
   function submit(e: FormEvent): void {
     e.preventDefault()
@@ -48,11 +56,11 @@ export function NameDialog({
       <form className="modal modal-narrow" onMouseDown={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2>{title}</h2>
         <label>
-          Session name
+          {label}
           <input
             ref={inputRef}
             value={name}
-            placeholder="auth-refactor"
+            placeholder={placeholder}
             spellCheck={false}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && onClose()}

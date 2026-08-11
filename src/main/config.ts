@@ -4,12 +4,25 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { defaultConfig, normalizeConfig, type RipponConfig } from '../shared/types'
+import {
+  defaultLocalConfig,
+  looksLikeLegacyConfig,
+  normalizeLocalConfig,
+  normalizeProfile,
+  type LocalConfig,
+  type Profile
+} from '../shared/types'
 
 /**
- * Config lives in a plain JSON file the user can point anywhere — typically
- * inside a Google Drive / Dropbox folder so tabs follow them across machines.
- * The *location* of that file is the one thing stored per-machine, in userData.
+ * The local file holds only what a machine needs to open the connection — host,
+ * flags, forwards — plus which profile to load. Everything else lives in that
+ * profile, on the remote host. The *location* of this local file is itself the
+ * one thing stored per-machine, in userData.
+ *
+ * A pre-profiles file (v1–v4) still carries the full presentation on disk; on
+ * load we keep it as a `pendingLegacyProfile` and leave the file untouched until
+ * the migration has safely pushed it to the host, so a failed/offline migration
+ * never loses anyone's layout.
  */
 
 interface Settings {
@@ -45,7 +58,8 @@ function writeSettings(s: Settings): void {
 
 export class ConfigStore extends EventEmitter {
   private currentPath: string
-  private cache: RipponConfig = defaultConfig()
+  private local: LocalConfig = defaultLocalConfig()
+  private pendingLegacy: Profile | null = null
   /** Serialized form of our last write, so we can ignore the watch event it causes. */
   private lastWritten = ''
   private watching = false
@@ -59,30 +73,47 @@ export class ConfigStore extends EventEmitter {
     return this.currentPath
   }
 
-  async load(): Promise<RipponConfig> {
+  get current(): LocalConfig {
+    return this.local
+  }
+
+  /** Presentation lifted from a pre-profiles file, awaiting migration to the host. */
+  get pendingLegacyProfile(): Profile | null {
+    return this.pendingLegacy
+  }
+
+  clearPendingLegacy(): void {
+    this.pendingLegacy = null
+  }
+
+  async load(): Promise<LocalConfig> {
     try {
       const text = await fsp.readFile(this.currentPath, 'utf8')
+      // Track the on-disk text so our own later write does not read as external.
       this.lastWritten = text
-      this.cache = normalizeConfig(JSON.parse(text))
+      const raw = JSON.parse(text)
+      this.local = normalizeLocalConfig(raw)
+      this.pendingLegacy = looksLikeLegacyConfig(raw) ? normalizeProfile(raw) : null
     } catch (err) {
       const e = err as NodeJS.ErrnoException
       if (e.code !== 'ENOENT') {
         this.emit('error', `Could not read ${this.currentPath}: ${e.message}`)
       }
-      this.cache = defaultConfig()
+      this.local = defaultLocalConfig()
+      this.pendingLegacy = null
       // Materialize the file so the user has something to sync / hand-edit.
-      await this.save(this.cache)
+      await this.save(this.local)
     }
     this.startWatching()
-    return this.cache
+    return this.local
   }
 
-  async save(cfg: RipponConfig): Promise<void> {
-    const normalized = normalizeConfig(cfg)
+  async save(local: LocalConfig): Promise<void> {
+    const normalized = normalizeLocalConfig(local)
     const text = JSON.stringify(normalized, null, 2) + '\n'
     if (text === this.lastWritten) return
 
-    this.cache = normalized
+    this.local = normalized
     this.lastWritten = text
 
     await fsp.mkdir(path.dirname(this.currentPath), { recursive: true })
@@ -92,7 +123,7 @@ export class ConfigStore extends EventEmitter {
     await fsp.rename(tmp, this.currentPath)
   }
 
-  async setPath(newPath: string): Promise<RipponConfig> {
+  async setPath(newPath: string): Promise<LocalConfig> {
     this.stopWatching()
     this.currentPath = newPath
     writeSettings({ configPath: newPath })
@@ -128,12 +159,14 @@ export class ConfigStore extends EventEmitter {
     if (text === this.lastWritten) return
     this.lastWritten = text
     try {
-      this.cache = normalizeConfig(JSON.parse(text))
+      const raw = JSON.parse(text)
+      this.local = normalizeLocalConfig(raw)
+      this.pendingLegacy = looksLikeLegacyConfig(raw) ? normalizeProfile(raw) : null
     } catch {
       this.emit('error', `${this.currentPath} is not valid JSON; ignoring the change.`)
       return
     }
-    this.emit('external-change', this.cache)
+    this.emit('external-change', this.local)
   }
 
   dispose(): void {

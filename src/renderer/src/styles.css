@@ -524,6 +524,27 @@ body {
   border-color: var(--accent);
 }
 
+.profile-chip {
+  -webkit-app-region: no-drag;
+  margin-left: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.profile-chip:hover {
+  border-color: var(--accent);
+}
+
 .error-bar {
   display: flex;
   align-items: center;
@@ -982,4 +1003,171 @@ body {
   color: var(--danger);
   border-color: #4a2b33;
   background: transparent;
+}
+
+/* ---------- port forwards ---------- */
+.tunnels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--border);
+}
+
+.tunnels-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.tunnels-note {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.tunnels-note code {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.tunnel-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.tunnel-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 88px 22px;
+  gap: 6px;
+  align-items: center;
+}
+
+.tunnel-row-labels {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+.tunnel-row input {
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  user-select: text;
+  outline: none;
+}
+
+.tunnel-row input:focus {
+  border-color: var(--accent);
+}
+
+.tunnel-row input.input-error {
+  border-color: var(--danger);
+}
+
+.tunnel-remove {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tunnel-remove:hover {
+  color: var(--danger);
+  border-color: #4a2b33;
+}
+
+.tunnel-error {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  margin-top: -2px;
+}
+
+.tunnel-add {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tunnel-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.tunnel-status-ok {
+  color: var(--ok);
+  font-size: 11px;
+}
+
+.tunnel-status-error {
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.tunnel-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tunnel-badge-ok {
+  color: var(--ok);
+  border-color: #2f4a2a;
+}
+
+.tunnel-badge-error {
+  color: var(--danger);
+  border-color: #4a2b33;
+}
+
+.tunnel-badge-idle {
+  color: var(--text-dim);
+}
+
+.tunnel-chip {
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tunnel-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.tunnel-chip-ok {
+  color: var(--ok);
+  border-color: #2f4a2a;
+}
+
+.tunnel-chip-error {
+  color: var(--danger);
+  border-color: #4a2b33;
 }

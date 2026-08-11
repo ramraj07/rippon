@@ -15,7 +15,7 @@ const CONTROL_DIR = path.join(os.homedir(), '.rippon')
  * attach usually opens it, so the frequent list/create/kill calls cost no
  * handshake and, more importantly, no second round of auth prompts.
  */
-function controlArgs(): string[] {
+export function controlArgs(): string[] {
   fs.mkdirSync(CONTROL_DIR, { recursive: true })
   return [
     '-o',
