@@ -86,6 +86,99 @@ function createWindow(): void {
     console.error(`[preload] ${preloadPath}: ${error.message}`)
   })
 
+  if (process.env['RIPPON_DEBUG_SELECT']) {
+    setTimeout(async () => {
+      const wc = mainWindow?.webContents
+      if (!wc) return
+      const rect = await wc.executeJavaScript(`(() => {
+        const el = document.querySelector('.pane-slot:not([style*="display: none"]) .terminal-host')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.x, y: r.y, w: r.width, h: r.height }
+      })()`)
+      if (!rect) {
+        console.log('[select] no visible terminal host found')
+        return
+      }
+      const x0 = Math.round(rect.x + 12)
+      const y0 = Math.round(rect.y + 30)
+
+      // What is actually under the pointer where the drag begins?
+      const hit = await wc.executeJavaScript(`(() => {
+        const el = document.elementFromPoint(${x0}, ${y0})
+        if (!el) return 'nothing'
+        const path = []
+        for (let e = el; e && path.length < 5; e = e.parentElement) {
+          path.push(e.tagName.toLowerCase() + (e.className ? '.' + String(e.className).split(' ').join('.') : ''))
+        }
+        return path.join(' < ')
+      })()`)
+      console.log(`[select] drag from (${x0},${y0}) over ${JSON.stringify(rect)}`)
+      console.log(`[select] element at point: ${hit}`)
+      const opts = await wc.executeJavaScript(`(() => {
+        const m = window.__rippon_terminals
+        if (!m) return 'no map'
+        const t = [...m.values()][0]
+        return JSON.stringify({
+          macOptionClickForcesSelection: t.options.macOptionClickForcesSelection,
+          rightClickSelectsWord: t.options.rightClickSelectsWord
+        })
+      })()`)
+      console.log(`[select] live options: ${opts}`)
+
+      await wc.executeJavaScript(`(() => {
+        window.__selProbe = { down: 0, move: 0, up: 0 }
+        document.addEventListener('mousedown', () => window.__selProbe.down++, true)
+        document.addEventListener('mousemove', () => window.__selProbe.move++, true)
+        document.addEventListener('mouseup', () => window.__selProbe.up++, true)
+      })()`)
+
+      const dragWith = async (modifiers: string[]): Promise<void> => {
+        const mods = modifiers as Parameters<typeof wc.sendInputEvent>[0]['modifiers']
+        wc.sendInputEvent({ type: 'mouseDown', x: x0, y: y0, button: 'left', clickCount: 1, modifiers: mods })
+        for (let i = 1; i <= 10; i++) {
+          wc.sendInputEvent({
+            type: 'mouseMove',
+            x: Math.round(x0 + (rect.w - 30) * (i / 10)),
+            y: Math.round(y0 + 40 * (i / 10)),
+            button: 'left',
+            modifiers: mods
+          })
+          await new Promise((r) => setTimeout(r, 40))
+        }
+        wc.sendInputEvent({
+          type: 'mouseUp',
+          x: Math.round(x0 + rect.w - 30),
+          y: Math.round(y0 + 40),
+          button: 'left',
+          clickCount: 1,
+          modifiers: mods
+        })
+        await new Promise((r) => setTimeout(r, 500))
+      }
+
+      const report = async (label: string): Promise<void> => {
+        const out = await wc.executeJavaScript(`(() => {
+          const m = window.__rippon_terminals
+          if (!m) return 'no map'
+          return JSON.stringify([...m.entries()].map(([id, t]) => ({
+            id,
+            text: t.getSelection().slice(0, 30),
+            range: t.getSelectionPosition() || null
+          })).filter((r) => r.text || r.range))
+        })()`)
+        console.log(`[select] ${label}: ${out}`)
+      }
+
+      await dragWith([])
+      await report('plain drag')
+      await dragWith(['alt'])
+      await report('option drag')
+      await dragWith(['shift'])
+      await report('shift drag ')
+    }, 16000)
+  }
+
   if (process.env['RIPPON_DEBUG_MAXIMIZE']) {
     setTimeout(() => {
       console.log('[debug] maximize')

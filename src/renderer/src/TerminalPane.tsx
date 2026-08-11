@@ -154,6 +154,10 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
 
     termRef.current = term
     fitRef.current = fit
+    // Debug handle: lets the main process inspect selection state. See
+    // RIPPON_DEBUG_SELECT in src/main/index.ts.
+    const debug = (window as unknown as { __rippon_terminals?: Map<string, Terminal> })
+    ;(debug.__rippon_terminals ??= new Map()).set(id, term)
 
     const onDataDisposable = term.onData((data) => void window.rippon.pty.write(id, data))
 
@@ -297,14 +301,44 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
           e.preventDefault()
           const term = termRef.current
           const selection = term?.getSelection() ?? ''
+          /*
+           * A full-screen program — which is what an agent's TUI is — turns on
+           * mouse reporting, and then a drag belongs to that program rather than
+           * to us: xterm forwards it and never starts a selection. Holding ⌥
+           * overrides that, but it is not discoverable, so say so, and offer the
+           * buffer copies that work whatever the mouse is doing.
+           */
+          const mouseGrabbed =
+            hostRef.current?.querySelector('.xterm')?.classList.contains('enable-mouse-events') ??
+            false
+
+          const copyBuffer = (all: boolean): void => {
+            if (!term) return
+            const buf = term.buffer.active
+            const from = all ? 0 : buf.viewportY
+            const to = all ? buf.length : buf.viewportY + term.rows
+            const lines: string[] = []
+            for (let i = from; i < to; i++) {
+              lines.push(buf.getLine(i)?.translateToString(true) ?? '')
+            }
+            void window.rippon.clipboard.write(lines.join('\n').replace(/\s+$/, ''))
+          }
+
           onContextMenu(e.clientX, e.clientY, [
             {
-              label: selection ? 'Copy' : 'Copy (nothing selected)',
+              label: selection
+                ? 'Copy selection'
+                : mouseGrabbed
+                  ? 'Copy selection — hold ⌥ and drag to select'
+                  : 'Copy selection (nothing selected)',
               disabled: !selection,
               onClick: () => void window.rippon.clipboard.write(selection)
             },
+            { label: 'Copy visible screen', onClick: () => copyBuffer(false) },
+            { label: 'Copy all scrollback', onClick: () => copyBuffer(true) },
             {
               label: 'Paste',
+              separator: true,
               onClick: () => {
                 void window.rippon.clipboard.read().then((text) => {
                   if (text) void window.rippon.pty.write(id, text)
