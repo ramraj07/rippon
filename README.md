@@ -27,29 +27,58 @@ First launch opens SSH settings. Fill in the host and any flags, and the tab str
 ## Building an app
 
 ```bash
-npm run dist        # → release/Rippon-<version>-arm64.dmg and .zip
+npm run dist        # → release/Rippon-<version>-arm64.dmg and -arm64-mac.zip
 npm run dist:dir    # unpacked release/mac-arm64/Rippon.app, for a quick check
 ```
 
 Targets Apple Silicon. `node-pty` is native, so it is unpacked from the asar
 archive; everything else is bundled.
 
-The build is **ad-hoc signed, not notarized** — a Developer ID needs a paid
-account. On this machine it just opens. On another Mac, Gatekeeper refuses it
-once with "unidentified developer"; either right-click → Open, allow it under
-System Settings → Privacy & Security, or clear the quarantine flag after
-copying:
+### Gatekeeper
+
+The build is **ad-hoc signed, not notarized** — notarizing needs a Developer ID,
+which needs a paid Apple Developer account. On the machine that built it, it just
+opens. On any other Mac, macOS 15 blocks the first launch with:
+
+> Apple could not verify "Rippon" is free of malware that may harm your Mac or
+> compromise your privacy.
+
+That dialog offers only **Done** and **Move to Trash** — the right-click → Open
+bypass older macOS versions had is gone. Only notarization removes the block
+outright. Short of that, there are two ways through.
+
+**Allow it once.** After being blocked: System Settings → Privacy & Security →
+scroll to the note about Rippon → **Open Anyway**, then confirm. Once per install.
+
+**Or never pick up the quarantine flag.** macOS attaches it to what a *browser*
+downloads; `curl` does not set it, so a copy fetched from a terminal is never
+assessed and simply opens:
+
+```bash
+curl -L -o Rippon.zip \
+  https://github.com/ramraj07/rippon/releases/latest/download/Rippon-<version>-arm64-mac.zip
+unzip Rippon.zip -d /Applications
+```
+
+Already installed from the `.dmg` or a browser download? Strip the flag instead —
+same effect:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Rippon.app
 ```
 
-The ad-hoc signature is what keeps that dialog recoverable. `identity: null`
-alone leaves the bundle carrying Electron's own signature, which seals none of
-our files — and macOS refuses a *broken* signature far more harshly than a
-missing one, with "Rippon is damaged and can't be opened" and no way past it in
-the UI. `scripts/adhoc-sign.js` re-signs the bundle from `afterPack` and fails
-the build if verification does not pass.
+Unpacking a browser-downloaded archive is *not* a way around this: the flag
+propagates from the archive onto the app bundle inside it, through command-line
+`tar` just as much as Archive Utility. Verified on 15.7.5 — don't add a `.tar.gz`
+target expecting otherwise.
+
+None of this is the ad-hoc signature failing — it is doing its job. `identity:
+null` alone leaves the bundle carrying Electron's own signature, which seals none
+of our files, and macOS refuses a *broken* signature far more harshly than a
+missing one: "Rippon is damaged and can't be opened", with no way past it in the
+UI at all. `scripts/adhoc-sign.js` re-signs the bundle from `afterPack` and fails
+the build if verification does not pass, which is what keeps the block at the
+recoverable "could not verify" stage. Only notarization removes it outright.
 
 Packaged and dev runs share one profile (`~/Library/Application Support/rippon`),
 so a browser login done in either applies to both.

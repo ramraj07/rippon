@@ -1,6 +1,6 @@
 {
   "name": "rippon",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Tabbed SSH + browser panes for driving remote coding agents",
   "main": "./out/main/index.js",
   "author": "Ramraj Velmurugan",
