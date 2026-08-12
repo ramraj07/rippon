@@ -51,13 +51,13 @@ outright. Short of that, there are two ways through.
 scroll to the note about Rippon → **Open Anyway**, then confirm. Once per install.
 
 **Or never pick up the quarantine flag.** macOS attaches it to what a *browser*
-downloads; `curl` does not set it, so a copy fetched from a terminal is never
-assessed and simply opens:
+downloads; command-line downloaders do not set it, so a copy fetched from a
+terminal is never assessed and simply opens. The repo is private, so this needs
+an authenticated `gh` rather than a plain `curl`:
 
 ```bash
-curl -L -o Rippon.zip \
-  https://github.com/ramraj07/rippon/releases/latest/download/Rippon-<version>-arm64-mac.zip
-unzip Rippon.zip -d /Applications
+gh release download v<version> -R ramraj07/rippon -p '*-arm64-mac.zip'
+unzip Rippon-<version>-arm64-mac.zip -d /Applications
 ```
 
 Already installed from the `.dmg` or a browser download? Strip the flag instead —
