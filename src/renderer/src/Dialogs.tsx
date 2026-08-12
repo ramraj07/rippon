@@ -391,3 +391,42 @@ export function CloseSessionDialog({
     </div>
   )
 }
+
+interface ErrorDialogProps {
+  title: string
+  detail: string
+  onClose(): void
+}
+
+/**
+ * Failures from something the user just clicked. Those get a dialog rather than
+ * the error bar: the bar is a single clipped line shared with background poll
+ * errors, so an ssh or tmux message — which is the whole diagnosis, and is
+ * usually several lines — was unreadable exactly when it mattered most.
+ */
+export function ErrorDialog({ title, detail, onClose }: ErrorDialogProps): JSX.Element {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => closeRef.current?.focus(), [])
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div
+        className="modal"
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+      >
+        <h2>{title}</h2>
+        <pre className="error-detail">{detail}</pre>
+        <div className="modal-actions">
+          <button type="button" onClick={() => void window.rippon.clipboard.write(detail)}>
+            Copy
+          </button>
+          <span className="spacer" />
+          <button type="button" ref={closeRef} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

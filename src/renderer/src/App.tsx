@@ -15,6 +15,7 @@ import {
   CloseSessionDialog,
   ColumnsDialog,
   ContextMenu,
+  ErrorDialog,
   NameDialog,
   TextDialog,
   ViewDialog,
@@ -57,6 +58,7 @@ type Dialog =
   | { kind: 'rename-bookmark'; scope: BookmarkScope; session: string; bookmark: Bookmark }
   | { kind: 'new-profile' }
   | { kind: 'rename-profile' }
+  | { kind: 'error'; title: string; detail: string }
   | null
 
 type Ctx = { x: number; y: number; items: MenuItem[] } | null
@@ -211,6 +213,16 @@ export default function App(): JSX.Element {
     [listed]
   )
 
+  /**
+   * Report a failed action the user asked for. Anything they clicked gets a
+   * dialog with the message intact — the error bar is for the background poll,
+   * where a modal every few seconds would be unusable, and it clips to one line
+   * anyway.
+   */
+  const failed = useCallback((title: string, detail: string) => {
+    setDialog({ kind: 'error', title, detail })
+  }, [])
+
   // ---------- session actions ----------
 
   const createSession = useCallback(
@@ -218,7 +230,7 @@ export default function App(): JSX.Element {
       setDialog(null)
       const res = await window.rippon.tmux.create(configRef.current.ssh, name)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not create session “${name}”`, res.error)
         return
       }
       const cur = configRef.current
@@ -242,7 +254,7 @@ export default function App(): JSX.Element {
       })
       await refresh()
     },
-    [commit, refresh]
+    [commit, failed, refresh]
   )
 
   /** Remove from this view only; the session keeps running. */
@@ -264,7 +276,7 @@ export default function App(): JSX.Element {
       const next = neighbourOf(name)
       const res = await window.rippon.tmux.kill(configRef.current.ssh, name)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not kill session “${name}”`, res.error)
         return
       }
       const cur = configRef.current
@@ -281,7 +293,7 @@ export default function App(): JSX.Element {
       })
       await refresh()
     },
-    [commit, neighbourOf, refresh]
+    [commit, failed, neighbourOf, refresh]
   )
 
   const renameSession = useCallback(
@@ -290,7 +302,7 @@ export default function App(): JSX.Element {
       if (from === to) return
       const res = await window.rippon.tmux.rename(configRef.current.ssh, from, to)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not rename “${from}” to “${to}”`, res.error)
         return
       }
       const cur = configRef.current
@@ -307,7 +319,7 @@ export default function App(): JSX.Element {
       })
       await refresh()
     },
-    [commit, refresh]
+    [commit, failed, refresh]
   )
 
   const restoreSession = useCallback(
@@ -481,7 +493,7 @@ export default function App(): JSX.Element {
       if (name === configRef.current.activeProfile) return
       const res = await window.rippon.profile.use(name)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not switch to profile “${name}”`, res.error)
         return
       }
       setProfiles(res.value.profiles)
@@ -489,7 +501,7 @@ export default function App(): JSX.Element {
       setListError(null)
       await refresh()
     },
-    [applyConfig, refresh]
+    [applyConfig, failed, refresh]
   )
 
   const createProfile = useCallback(
@@ -497,13 +509,13 @@ export default function App(): JSX.Element {
       setDialog(null)
       const res = await window.rippon.profile.create(name)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not create profile “${name}”`, res.error)
         return
       }
       setProfiles(res.value)
       await useProfile(name)
     },
-    [useProfile]
+    [failed, useProfile]
   )
 
   const renameProfile = useCallback(
@@ -513,24 +525,24 @@ export default function App(): JSX.Element {
       if (from === to) return
       const res = await window.rippon.profile.rename(from, to)
       if (!res.ok) {
-        setListError(res.error)
+        failed(`Could not rename profile “${from}” to “${to}”`, res.error)
         return
       }
       setProfiles(res.value.profiles)
       applyConfig({ ...configRef.current, activeProfile: res.value.activeProfile })
     },
-    [applyConfig]
+    [applyConfig, failed]
   )
 
   const deleteProfile = useCallback(async (name: string) => {
     setCtx(null)
     const res = await window.rippon.profile.delete(name)
     if (!res.ok) {
-      setListError(res.error)
+      failed(`Could not delete profile “${name}”`, res.error)
       return
     }
     setProfiles(res.value)
-  }, [])
+  }, [failed])
 
   const profileMenu = useCallback(
     (x: number, y: number) => {
@@ -1199,6 +1211,14 @@ export default function App(): JSX.Element {
           count={sessions.length}
           suggestion={suggestColumns(sessions.length)}
           onSubmit={fillTiles}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+
+      {dialog?.kind === 'error' ? (
+        <ErrorDialog
+          title={dialog.title}
+          detail={dialog.detail}
           onClose={() => setDialog(null)}
         />
       ) : null}
