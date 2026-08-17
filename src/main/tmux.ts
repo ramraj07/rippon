@@ -10,6 +10,37 @@ const exec = promisify(execFile)
 const LIST_FORMAT = '#{session_name}\t#{session_created}\t#{session_attached}\t#{session_windows}'
 const CONTROL_DIR = path.join(os.homedir(), '.rippon')
 
+/** How long any one non-interactive ssh call gets before we give up on it. */
+const TIMEOUT_MS = 20000
+
+/*
+ * Keepalive is not a nicety here, it is what stops the multiplexed connection
+ * from taking the whole app down with it.
+ *
+ * When the path to the host disappears mid-connection — a VPN re-route, a sleep,
+ * a Wi-Fi change — the TCP socket is left half-open. The kernel happily reports
+ * it ESTABLISHED for another two hours, so a master with no keepalive never
+ * notices and never exits. It keeps answering on its control socket, and every
+ * new ssh with ControlMaster=auto joins it and blocks forever behind a
+ * connection that will never carry another byte. The give-away is that a plain
+ * `ssh host` still works instantly: with no ControlPath it never touches the
+ * wedged master. `ssh -O check` is no help either — it asks the local process,
+ * not the network, so it cheerfully reports "Master running".
+ *
+ * ServerAlive turns that from a hang into a clean exit after ~45s, which the
+ * next call is free to replace with a fresh connection.
+ */
+const KEEPALIVE_ARGS = [
+  '-o',
+  'ServerAliveInterval=15',
+  '-o',
+  'ServerAliveCountMax=3',
+  // A host that is simply unreachable should say so long before TIMEOUT_MS, so
+  // the failure arrives as ssh's own message rather than our timeout killing it.
+  '-o',
+  'ConnectTimeout=10'
+]
+
 /**
  * Every ssh invocation shares one multiplexed connection. The interactive tmux
  * attach usually opens it, so the frequent list/create/kill calls cost no
@@ -18,6 +49,7 @@ const CONTROL_DIR = path.join(os.homedir(), '.rippon')
 export function controlArgs(): string[] {
   fs.mkdirSync(CONTROL_DIR, { recursive: true })
   return [
+    ...KEEPALIVE_ARGS,
     '-o',
     'ControlMaster=auto',
     '-o',
@@ -25,6 +57,14 @@ export function controlArgs(): string[] {
     '-o',
     'ControlPersist=120'
   ]
+}
+
+/**
+ * The same connection settings with multiplexing off, for the one retry after a
+ * hang: it cannot join — or re-wedge on — the master we just gave up on.
+ */
+function soloArgs(): string[] {
+  return [...KEEPALIVE_ARGS, '-o', 'ControlPath=none']
 }
 
 /** Args for the interactive PTY connection that attaches to a session. */
@@ -64,9 +104,16 @@ function describe(err: unknown, command: string): string {
   const body = stderr || stdout || (e.message ?? String(err)).trim()
 
   // "exit 1" alone explains nothing; ENOENT means ssh itself is missing, and a
-  // signal here is almost always our own 20s timeout.
+  // signal here is almost always our own timeout. That one needs spelling out:
+  // a silent kill is exactly what a hang looks like, and since remote() already
+  // retried on a connection of its own, reaching here means both attempts hung —
+  // which points at the network or the host, not at the multiplexed connection.
   const how = e.signal
-    ? `killed by ${e.signal}${e.signal === 'SIGTERM' ? ' — timed out after 20s' : ''}`
+    ? `killed by ${e.signal}${
+        e.signal === 'SIGTERM'
+          ? ` — no response within ${TIMEOUT_MS / 1000}s, on the shared connection and on a fresh one`
+          : ''
+      }`
     : typeof e.code === 'string'
       ? e.code === 'ENOENT'
         ? 'ENOENT — no ssh binary on PATH'
@@ -78,16 +125,87 @@ function describe(err: unknown, command: string): string {
   return `${body}\n\nran: ${command}\n(${how})`.slice(0, 4000)
 }
 
-async function remote(ssh: SshConfig, command: string): Promise<string> {
+export interface RemoteOptions {
+  /** Piped to the remote command's stdin when present. */
+  stdin?: string
+  maxBuffer?: number
+}
+
+/**
+ * Whether a failure looks like the wedged master described above rather than an
+ * honest refusal.
+ *
+ * Our own timeout is the signature: ssh reports every real failure — auth, DNS,
+ * refused, ConnectTimeout — promptly and on stderr. Being killed while silent
+ * means it was waiting on something that was never going to answer.
+ */
+function wedged(err: unknown): boolean {
+  const e = err as { killed?: boolean; signal?: string }
+  return e.killed === true || e.signal === 'SIGTERM'
+}
+
+/** Ask the multiplexing master to exit. Best-effort: a failure here is fine. */
+async function resetMaster(ssh: SshConfig): Promise<void> {
+  try {
+    await exec('ssh', [...controlArgs(), ...ssh.args, '-O', 'exit', ssh.host], { timeout: 5000 })
+  } catch {
+    // Either there was no master, or it is too far gone to answer its own
+    // control socket. The retry does not go through it either way.
+  }
+}
+
+function runOnce(
+  ssh: SshConfig,
+  command: string,
+  args: string[],
+  opts: RemoteOptions
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      'ssh',
+      [...args, ...ssh.args, ssh.host, command],
+      { timeout: TIMEOUT_MS, maxBuffer: opts.maxBuffer ?? 1024 * 1024 },
+      (err, stdout, stderr) => {
+        // execFile hands stderr to the callback, not to the error, and describe()
+        // needs it — it is the only place ssh ever explains itself.
+        if (err) reject(Object.assign(err, { stdout, stderr }))
+        else resolve(stdout)
+      }
+    )
+    if (opts.stdin !== undefined) {
+      // A guard command (e.g. an "exists" check) can exit before reading stdin,
+      // closing the pipe — swallow the resulting EPIPE, the callback reports the
+      // real failure.
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(opts.stdin)
+    }
+  })
+}
+
+/**
+ * Run a remote command: once over the shared connection and, only if that hung,
+ * once more on a connection of its own.
+ *
+ * The retry is what turns a wedged master from a visible failure into a blip.
+ * It is deliberately narrow — a host that is merely down answers quickly and is
+ * reported as-is, so this never doubles the wait for the common case.
+ */
+export async function remote(
+  ssh: SshConfig,
+  command: string,
+  opts: RemoteOptions = {}
+): Promise<string> {
   if (!ssh.host) throw new Error('No SSH host configured.')
   try {
-    const { stdout } = await exec('ssh', [...controlArgs(), ...ssh.args, ssh.host, command], {
-      timeout: 20000,
-      maxBuffer: 1024 * 1024
-    })
-    return stdout
+    return await runOnce(ssh, command, controlArgs(), opts)
   } catch (err) {
-    throw new Error(describe(err, command))
+    if (!wedged(err)) throw new Error(describe(err, command))
+    await resetMaster(ssh)
+    try {
+      return await runOnce(ssh, command, soloArgs(), opts)
+    } catch (retry) {
+      throw new Error(describe(retry, command))
+    }
   }
 }
 

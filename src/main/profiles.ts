@@ -1,6 +1,4 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { controlArgs } from './tmux'
+import { remote } from './tmux'
 import { defaultProfile, normalizeProfile, PROFILE_NAME_RE, type Profile, type SshConfig } from '../shared/types'
 
 /**
@@ -11,7 +9,6 @@ import { defaultProfile, normalizeProfile, PROFILE_NAME_RE, type Profile, type S
  * remote command — the JSON payload only ever travels over stdin, never inline.
  */
 
-const exec = promisify(execFile)
 const REMOTE_DIR = '~/.rippon/profiles'
 
 function assertName(name: string): void {
@@ -22,49 +19,28 @@ function remotePath(name: string): string {
   return `${REMOTE_DIR}/${name}.json`
 }
 
-function describe(err: unknown): string {
-  const e = err as { stderr?: string; message?: string }
-  const text = (e.stderr || e.message || String(err)).trim()
-  return text.split('\n').filter(Boolean).slice(-3).join(' — ')
-}
+/*
+ * Everything here goes through tmux.ts's `remote`, which owns the ssh options,
+ * the timeout, and the one retry that recovers a wedged multiplexing master.
+ * This module used to run its own execFile with its own error formatting, and
+ * that formatting only ever looked at stderr — so a hang, which is killed
+ * silently and leaves stderr empty, surfaced as a bare "Command failed: ssh …"
+ * with no hint that it had timed out or why.
+ */
 
 /** Run a remote command and return its stdout. */
-async function sshRead(ssh: SshConfig, command: string): Promise<string> {
-  if (!ssh.host) throw new Error('No SSH host configured.')
-  const { stdout } = await exec('ssh', [...controlArgs(), ...ssh.args, ssh.host, command], {
-    timeout: 20000,
-    maxBuffer: 4 * 1024 * 1024
-  })
-  return stdout
+function sshRead(ssh: SshConfig, command: string): Promise<string> {
+  return remote(ssh, command, { maxBuffer: 4 * 1024 * 1024 })
 }
 
-/** Run a remote command, ignoring stdout; throws a described error on failure. */
+/** Run a remote command, ignoring stdout. */
 async function sshRun(ssh: SshConfig, command: string): Promise<void> {
-  try {
-    await sshRead(ssh, command)
-  } catch (err) {
-    throw new Error(describe(err))
-  }
+  await remote(ssh, command)
 }
 
 /** Run a remote command with `text` piped to its stdin. */
-function sshWrite(ssh: SshConfig, command: string, text: string): Promise<void> {
-  if (!ssh.host) return Promise.reject(new Error('No SSH host configured.'))
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      'ssh',
-      [...controlArgs(), ...ssh.args, ssh.host, command],
-      { timeout: 20000 },
-      (err, _stdout, stderr) => {
-        if (err) reject(new Error(describe({ stderr, message: err.message })))
-        else resolve()
-      }
-    )
-    // A guard command (e.g. "exists" check) can exit before reading stdin,
-    // closing the pipe — swallow the resulting EPIPE, the callback reports it.
-    child.stdin?.on('error', () => {})
-    child.stdin?.end(text)
-  })
+async function sshWrite(ssh: SshConfig, command: string, text: string): Promise<void> {
+  await remote(ssh, command, { stdin: text })
 }
 
 export async function listProfiles(ssh: SshConfig): Promise<string[]> {
@@ -85,9 +61,12 @@ export async function readProfile(ssh: SshConfig, name: string): Promise<Profile
   try {
     stdout = await sshRead(ssh, `cat ${remotePath(name)}`)
   } catch (err) {
-    const text = describe(err)
+    // `cat` on a host that simply has no profile yet is not a failure — that is
+    // the first run, and the caller seeds the file. Anything else is real, and
+    // is rethrown whole: remote() has already described it.
+    const text = err instanceof Error ? err.message : String(err)
     if (/no such file|not found|cannot open/i.test(text)) return null
-    throw new Error(text)
+    throw err
   }
   if (!stdout.trim()) return null
   try {
