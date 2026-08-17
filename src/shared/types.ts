@@ -34,6 +34,39 @@ export interface TunnelStatus {
   error: string | null
 }
 
+/** Which part of the app produced a log entry. */
+export type ActivitySource = 'ssh' | 'tmux' | 'profile' | 'tunnel' | 'pane'
+
+export type ActivityLevel = 'info' | 'ok' | 'warn' | 'error'
+
+/**
+ * One line in the SSH activity log.
+ *
+ * The log exists because ssh failures are diagnosed from what ssh said and how
+ * long it took, and until now the app kept neither: a call that hung was killed
+ * silently and reported as a bare "Command failed". So `detail` holds the whole
+ * of what ssh wrote rather than a summary of it, and `ms` is recorded even for
+ * successes — a poll that usually takes 200ms and starts taking 8s is the
+ * warning that something is going wrong, and it is invisible without a baseline.
+ */
+export interface ActivityEntry {
+  /** Assigned in order within a run; also the renderer's row key. */
+  seq: number
+  at: number
+  source: ActivitySource
+  level: ActivityLevel
+  text: string
+  /** How long the call took, when the entry describes one. */
+  ms?: number
+  /** The full text ssh produced, shown when the row is expanded. */
+  detail?: string
+  /**
+   * How many times this identical line has repeated. The session poll runs every
+   * 5s, so without collapsing it would bury everything else within the hour.
+   */
+  count?: number
+}
+
 export const PORT_MIN = 1
 export const PORT_MAX = 65535
 /** Conservative: these become bare `-L host:port` args, so keep them boring. */

@@ -11,6 +11,7 @@ import {
   type Rectangle
 } from 'electron'
 import path from 'node:path'
+import { activity } from './activity'
 import { BROWSER_PARTITION, BrowserViews } from './browser'
 import { ConfigStore } from './config'
 import {
@@ -31,6 +32,7 @@ import {
   type LocalConfig,
   type Profile,
   type RipponConfig,
+  type ActivityEntry,
   type SessionInfo,
   type SshConfig,
   type TunnelStatus
@@ -646,6 +648,11 @@ function registerIpc(): void {
 
   ipcMain.handle('tunnel:sync', (_e, ssh: SshConfig) => tunnels.sync(ssh))
   ipcMain.handle('tunnel:status', () => tunnels.status())
+  ipcMain.handle('tunnel:verbose', () => tunnels.isVerbose())
+  ipcMain.handle('tunnel:set-verbose', (_e, verbose: boolean) => tunnels.setVerbose(verbose))
+
+  ipcMain.handle('activity:get', () => activity.all())
+  ipcMain.handle('activity:clear', () => activity.clear())
 
   ipcMain.handle('browser:ensure', (_e, id: string, url: string) => browsers.ensure(id, url))
   ipcMain.handle('browser:destroy', (_e, id: string) => browsers.destroy(id))
@@ -685,6 +692,11 @@ function registerIpc(): void {
   ptys.on('exit', (id: string, code: number) => send('pty:exit', id, code))
 
   tunnels.on('status', (status: TunnelStatus) => send('tunnel:status', status))
+
+  // The log is append-mostly, so the renderer gets each entry as it lands and
+  // upserts by seq — a collapsed repeat re-sends the same entry with a new count.
+  activity.on('entry', (entry: ActivityEntry) => send('activity:entry', entry))
+  activity.on('cleared', () => send('activity:cleared'))
 
   // The file changed under us — a sync, or a hand edit. It carries the host and
   // the profile name, so the presentation half has to be fetched again.

@@ -29,22 +29,27 @@ function remotePath(name: string): string {
  */
 
 /** Run a remote command and return its stdout. */
-function sshRead(ssh: SshConfig, command: string): Promise<string> {
-  return remote(ssh, command, { maxBuffer: 4 * 1024 * 1024 })
+function sshRead(ssh: SshConfig, command: string, label: string): Promise<string> {
+  return remote(ssh, command, { maxBuffer: 4 * 1024 * 1024, source: 'profile', label })
 }
 
 /** Run a remote command, ignoring stdout. */
-async function sshRun(ssh: SshConfig, command: string): Promise<void> {
-  await remote(ssh, command)
+async function sshRun(ssh: SshConfig, command: string, label: string): Promise<void> {
+  await remote(ssh, command, { source: 'profile', label })
 }
 
 /** Run a remote command with `text` piped to its stdin. */
-async function sshWrite(ssh: SshConfig, command: string, text: string): Promise<void> {
-  await remote(ssh, command, { stdin: text })
+async function sshWrite(
+  ssh: SshConfig,
+  command: string,
+  text: string,
+  label: string
+): Promise<void> {
+  await remote(ssh, command, { stdin: text, source: 'profile', label })
 }
 
 export async function listProfiles(ssh: SshConfig): Promise<string[]> {
-  const stdout = await sshRead(ssh, `ls -1 ${REMOTE_DIR} 2>/dev/null || true`)
+  const stdout = await sshRead(ssh, `ls -1 ${REMOTE_DIR} 2>/dev/null || true`, 'list profiles')
   return stdout
     .split('\n')
     .map((s) => s.trim())
@@ -54,20 +59,29 @@ export async function listProfiles(ssh: SshConfig): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b))
 }
 
-/** Read one profile, or null if the host has no file for it yet. */
+/** Printed instead of the file when there is no file. Not valid JSON, by design. */
+const MISSING = '__rippon_no_profile__'
+
+/**
+ * Read one profile, or null if the host has no file for it yet.
+ *
+ * The remote side reports "no such profile" as a sentinel on stdout rather than
+ * by failing, so it stays distinguishable from a file that exists and could not
+ * be read. That distinction matters twice over: a `cat` that failed on
+ * permissions used to look identical to a first run, and the caller's response
+ * to a first run is to seed the profile — which would have written over the
+ * unreadable one. It also keeps the activity log honest, since the old version
+ * logged every first run as an error.
+ */
 export async function readProfile(ssh: SshConfig, name: string): Promise<Profile | null> {
   assertName(name)
-  let stdout: string
-  try {
-    stdout = await sshRead(ssh, `cat ${remotePath(name)}`)
-  } catch (err) {
-    // `cat` on a host that simply has no profile yet is not a failure — that is
-    // the first run, and the caller seeds the file. Anything else is real, and
-    // is rethrown whole: remote() has already described it.
-    const text = err instanceof Error ? err.message : String(err)
-    if (/no such file|not found|cannot open/i.test(text)) return null
-    throw err
-  }
+  const file = remotePath(name)
+  const stdout = await sshRead(
+    ssh,
+    `if [ -e ${file} ]; then cat ${file}; else echo ${MISSING}; fi`,
+    `read ${name}.json`
+  )
+  if (stdout.trim() === MISSING) return null
   if (!stdout.trim()) return null
   try {
     return normalizeProfile(JSON.parse(stdout))
@@ -81,7 +95,12 @@ export async function writeProfile(ssh: SshConfig, name: string, profile: Profil
   assertName(name)
   const text = JSON.stringify(profile, null, 2) + '\n'
   const tmp = `${REMOTE_DIR}/.${name}.${process.pid}.tmp`
-  await sshWrite(ssh, `mkdir -p ${REMOTE_DIR} && cat > ${tmp} && mv ${tmp} ${remotePath(name)}`, text)
+  await sshWrite(
+    ssh,
+    `mkdir -p ${REMOTE_DIR} && cat > ${tmp} && mv ${tmp} ${remotePath(name)}`,
+    text,
+    `write ${name}.json`
+  )
 }
 
 /** Create a fresh profile from the defaults, refusing to clobber an existing one. */
@@ -92,7 +111,8 @@ export async function createProfile(ssh: SshConfig, name: string): Promise<void>
   await sshWrite(
     ssh,
     `mkdir -p ${REMOTE_DIR} && if [ -e ${remotePath(name)} ]; then echo "profile already exists" >&2; exit 1; fi && cat > ${tmp} && mv ${tmp} ${remotePath(name)}`,
-    text
+    text,
+    `create ${name}.json`
   )
 }
 
@@ -102,11 +122,12 @@ export async function renameProfile(ssh: SshConfig, from: string, to: string): P
   if (from === to) return
   await sshRun(
     ssh,
-    `if [ -e ${remotePath(to)} ]; then echo "profile already exists" >&2; exit 1; fi; mv ${remotePath(from)} ${remotePath(to)}`
+    `if [ -e ${remotePath(to)} ]; then echo "profile already exists" >&2; exit 1; fi; mv ${remotePath(from)} ${remotePath(to)}`,
+    `rename ${from}.json → ${to}.json`
   )
 }
 
 export async function deleteProfile(ssh: SshConfig, name: string): Promise<void> {
   assertName(name)
-  await sshRun(ssh, `rm -f ${remotePath(name)}`)
+  await sshRun(ssh, `rm -f ${remotePath(name)}`, `delete ${name}.json`)
 }

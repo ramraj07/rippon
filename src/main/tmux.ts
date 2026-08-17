@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { SESSION_NAME_RE, type SessionInfo, type SshConfig } from '../shared/types'
+import { activity } from './activity'
+import { SESSION_NAME_RE, type ActivitySource, type SessionInfo, type SshConfig } from '../shared/types'
 
 const exec = promisify(execFile)
 
@@ -99,8 +100,11 @@ function describe(err: unknown, command: string): string {
     signal?: string
     message?: string
   }
-  const stderr = (e.stderr ?? '').trim()
-  const stdout = (e.stdout ?? '').trim()
+  // ssh writes CRLF when it has a tty in play; left in, every line renders with a
+  // stray carriage return in the middle of the log.
+  const clean = (s: string | undefined): string => (s ?? '').replace(/\r\n?/g, '\n').trim()
+  const stderr = clean(e.stderr)
+  const stdout = clean(e.stdout)
   const body = stderr || stdout || (e.message ?? String(err)).trim()
 
   // "exit 1" alone explains nothing; ENOENT means ssh itself is missing, and a
@@ -129,6 +133,15 @@ export interface RemoteOptions {
   /** Piped to the remote command's stdin when present. */
   stdin?: string
   maxBuffer?: number
+  /** Which part of the app this call belongs to, for the activity log. */
+  source?: ActivitySource
+  /** Short label for the log. Defaults to the command, trimmed. */
+  label?: string
+  /**
+   * Turns stdout into a few words for the log — "7 sessions" rather than the
+   * bare fact that the call returned. Only ever called on success.
+   */
+  summarise?: (stdout: string) => string
 }
 
 /**
@@ -148,9 +161,13 @@ function wedged(err: unknown): boolean {
 async function resetMaster(ssh: SshConfig): Promise<void> {
   try {
     await exec('ssh', [...controlArgs(), ...ssh.args, '-O', 'exit', ssh.host], { timeout: 5000 })
-  } catch {
+    activity.add('ssh', 'info', 'shared connection torn down (-O exit)')
+  } catch (err) {
     // Either there was no master, or it is too far gone to answer its own
     // control socket. The retry does not go through it either way.
+    activity.add('ssh', 'info', 'shared connection could not be torn down', {
+      detail: err instanceof Error ? err.message : String(err)
+    })
   }
 }
 
@@ -196,15 +213,39 @@ export async function remote(
   opts: RemoteOptions = {}
 ): Promise<string> {
   if (!ssh.host) throw new Error('No SSH host configured.')
+  const source = opts.source ?? 'ssh'
+  const label = opts.label ?? command.replace(/\s+/g, ' ').slice(0, 60)
+  const started = Date.now()
+  const since = (): number => Date.now() - started
+
+  const ok = (stdout: string, fresh: boolean): string => {
+    const summary = opts.summarise?.(stdout)
+    const suffix = fresh ? ' (on a fresh connection)' : ''
+    activity.add(source, 'ok', `${label}${summary ? ` → ${summary}` : ''}${suffix}`, { ms: since() })
+    return stdout
+  }
+
   try {
-    return await runOnce(ssh, command, controlArgs(), opts)
+    return ok(await runOnce(ssh, command, controlArgs(), opts), false)
   } catch (err) {
-    if (!wedged(err)) throw new Error(describe(err, command))
+    if (!wedged(err)) {
+      const text = describe(err, command)
+      activity.add(source, 'error', label, { ms: since(), detail: text })
+      throw new Error(text)
+    }
+    activity.add(source, 'warn', `${label} — no response in ${TIMEOUT_MS / 1000}s, retrying`, {
+      ms: since()
+    })
     await resetMaster(ssh)
     try {
-      return await runOnce(ssh, command, soloArgs(), opts)
+      return ok(await runOnce(ssh, command, soloArgs(), opts), true)
     } catch (retry) {
-      throw new Error(describe(retry, command))
+      const text = describe(retry, command)
+      activity.add(source, 'error', `${label} — failed on a fresh connection too`, {
+        ms: since(),
+        detail: text
+      })
+      throw new Error(text)
     }
   }
 }
@@ -212,7 +253,14 @@ export async function remote(
 export async function listSessions(ssh: SshConfig): Promise<SessionInfo[]> {
   let stdout: string
   try {
-    stdout = await remote(ssh, `tmux list-sessions -F '${LIST_FORMAT}'`)
+    stdout = await remote(ssh, `tmux list-sessions -F '${LIST_FORMAT}'`, {
+      source: 'tmux',
+      label: 'list-sessions',
+      summarise: (out) => {
+        const n = out.split('\n').filter((l) => l.trim()).length
+        return `${n} session${n === 1 ? '' : 's'}`
+      }
+    })
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err)
     /*
@@ -250,13 +298,19 @@ export async function listSessions(ssh: SshConfig): Promise<SessionInfo[]> {
 export async function createSession(ssh: SshConfig, name: string): Promise<void> {
   assertName(name)
   const command = ssh.newSessionCommand?.trim()
-  await remote(ssh, `tmux new-session -d -s ${name}${command ? ` ${command}` : ''}`)
+  await remote(ssh, `tmux new-session -d -s ${name}${command ? ` ${command}` : ''}`, {
+    source: 'tmux',
+    label: `new-session ${name}`
+  })
 }
 
 export async function killSession(ssh: SshConfig, name: string): Promise<void> {
   assertName(name)
   try {
-    await remote(ssh, `tmux kill-session -t ${name}`)
+    await remote(ssh, `tmux kill-session -t ${name}`, {
+      source: 'tmux',
+      label: `kill-session ${name}`
+    })
   } catch (err) {
     // Already gone is the outcome we wanted anyway.
     const text = err instanceof Error ? err.message : String(err)
@@ -268,5 +322,8 @@ export async function killSession(ssh: SshConfig, name: string): Promise<void> {
 export async function renameSession(ssh: SshConfig, from: string, to: string): Promise<void> {
   assertName(from)
   assertName(to)
-  await remote(ssh, `tmux rename-session -t ${from} ${to}`)
+  await remote(ssh, `tmux rename-session -t ${from} ${to}`, {
+    source: 'tmux',
+    label: `rename-session ${from} → ${to}`
+  })
 }

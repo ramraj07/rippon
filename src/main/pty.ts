@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
 import * as pty from 'node-pty'
+import { activity } from './activity'
 import { attachArgs } from './tmux'
 import type { SshConfig } from '../shared/types'
 
@@ -32,9 +33,13 @@ export class PtyManager extends EventEmitter {
     })
 
     this.sessions.set(id, proc)
+    activity.add('pane', 'info', `attach ${session}`)
     proc.onData((data) => this.emit('data', id, data))
     proc.onExit(({ exitCode }) => {
       this.sessions.delete(id)
+      // A pane the user closed exits 0 through kill() below; a non-zero code
+      // here is ssh or tmux giving up on its own, which is worth a line.
+      activity.add('pane', exitCode ? 'warn' : 'info', `${session} detached (code ${exitCode})`)
       this.emit('exit', id, exitCode)
     })
   }

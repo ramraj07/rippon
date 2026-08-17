@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
+  ActivityEntry,
   BrowserState,
   FindMatches,
   RipponConfig,
@@ -81,7 +82,19 @@ const api = {
   tunnel: {
     sync: (ssh: SshConfig): Promise<void> => ipcRenderer.invoke('tunnel:sync', ssh),
     status: (): Promise<TunnelStatus> => ipcRenderer.invoke('tunnel:status'),
-    onStatus: (cb: (status: TunnelStatus) => void) => on<[TunnelStatus]>('tunnel:status', cb)
+    onStatus: (cb: (status: TunnelStatus) => void) => on<[TunnelStatus]>('tunnel:status', cb),
+    /** Whether the forwarder is running with -v. Session-only, not persisted. */
+    verbose: (): Promise<boolean> => ipcRenderer.invoke('tunnel:verbose'),
+    /** Restarts the forwarder, so the forwards blink. */
+    setVerbose: (verbose: boolean): Promise<void> =>
+      ipcRenderer.invoke('tunnel:set-verbose', verbose)
+  },
+  activity: {
+    get: (): Promise<ActivityEntry[]> => ipcRenderer.invoke('activity:get'),
+    clear: (): Promise<void> => ipcRenderer.invoke('activity:clear'),
+    /** Fires per entry; a collapsed repeat re-sends the same seq with a new count. */
+    onEntry: (cb: (entry: ActivityEntry) => void) => on<[ActivityEntry]>('activity:entry', cb),
+    onCleared: (cb: () => void) => on<[]>('activity:cleared', cb)
   },
   browser: {
     ensure: (id: string, url: string): Promise<void> =>

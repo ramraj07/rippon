@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react'
+import ActivityLog from './ActivityLog'
 import { isPort, tunnelError, type SshConfig, type Tunnel, type TunnelStatus } from '@shared/types'
 
 interface Props {
@@ -223,6 +224,8 @@ export default function SshSettings({
           ) : tunnelStatus?.running && tunnelStatus.forwards.length ? (
             <small className="tunnel-status-ok">Active: {tunnelStatus.forwards.join(', ')}</small>
           ) : null}
+
+          <ActivityLog />
         </div>
 
         {profileLoaded ? (
