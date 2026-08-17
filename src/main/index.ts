@@ -14,6 +14,7 @@ import path from 'node:path'
 import { activity } from './activity'
 import { BROWSER_PARTITION, BrowserViews } from './browser'
 import { ConfigStore } from './config'
+import { downloadFile, listDir, previewFile } from './files'
 import {
   createProfile,
   deleteProfile,
@@ -292,6 +293,11 @@ function buildMenu(): void {
           click: () => send('menu:new-view')
         },
         { label: 'Close Tab…', accelerator: 'CmdOrCtrl+W', click: () => send('menu:close-tab') },
+        {
+          label: 'Browse Remote Files…',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: () => send('menu:files')
+        },
         {
           label: 'Refresh Session List',
           accelerator: 'CmdOrCtrl+Shift+L',
@@ -653,6 +659,34 @@ function registerIpc(): void {
 
   ipcMain.handle('activity:get', () => activity.all())
   ipcMain.handle('activity:clear', () => activity.clear())
+
+  ipcMain.handle('files:list', (_e, path: string) =>
+    attempt(() => listDir(configStore.current.ssh, path))
+  )
+  ipcMain.handle('files:preview', (_e, path: string) =>
+    attempt(() => previewFile(configStore.current.ssh, path))
+  )
+  /*
+   * Ask where to put it before fetching a byte. The save dialog is also the
+   * consent: nothing on the host is written to this machine without the user
+   * naming the destination first.
+   */
+  ipcMain.handle('files:download', (_e, path: string, size: number) =>
+    attempt(async () => {
+      const name = path.slice(path.lastIndexOf('/') + 1) || 'download'
+      const result = await dialog.showSaveDialog({
+        defaultPath: app.getPath('downloads') + '/' + name,
+        buttonLabel: 'Download'
+      })
+      if (result.canceled || !result.filePath) return { saved: false as const }
+      const to = result.filePath
+      const bytes = await downloadFile(configStore.current.ssh, path, to, (done) =>
+        send('files:progress', path, done, size)
+      )
+      return { saved: true as const, path: to, bytes }
+    })
+  )
+  ipcMain.handle('files:reveal', (_e, path: string) => shell.showItemInFolder(path))
 
   ipcMain.handle('browser:ensure', (_e, id: string, url: string) => browsers.ensure(id, url))
   ipcMain.handle('browser:destroy', (_e, id: string) => browsers.destroy(id))

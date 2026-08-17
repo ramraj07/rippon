@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   ActivityEntry,
   BrowserState,
+  RemoteListing,
+  RemotePreview,
   FindMatches,
   RipponConfig,
   SessionInfo,
@@ -89,6 +91,20 @@ const api = {
     setVerbose: (verbose: boolean): Promise<void> =>
       ipcRenderer.invoke('tunnel:set-verbose', verbose)
   },
+  files: {
+    list: (path: string): Promise<Result<RemoteListing>> => ipcRenderer.invoke('files:list', path),
+    preview: (path: string): Promise<Result<RemotePreview>> =>
+      ipcRenderer.invoke('files:preview', path),
+    /** Prompts for a destination first; `saved: false` means the user cancelled. */
+    download: (
+      path: string,
+      size: number
+    ): Promise<Result<{ saved: boolean; path?: string; bytes?: number }>> =>
+      ipcRenderer.invoke('files:download', path, size),
+    reveal: (path: string): Promise<void> => ipcRenderer.invoke('files:reveal', path),
+    onProgress: (cb: (path: string, done: number, total: number) => void) =>
+      on<[string, number, number]>('files:progress', cb)
+  },
   activity: {
     get: (): Promise<ActivityEntry[]> => ipcRenderer.invoke('activity:get'),
     clear: (): Promise<void> => ipcRenderer.invoke('activity:clear'),
@@ -142,6 +158,7 @@ const api = {
       'menu:reconnect-ssh',
       'menu:cycle-tab',
       'menu:select-tab-index',
+      'menu:files',
       'menu:find',
       'menu:find-step'
     ]

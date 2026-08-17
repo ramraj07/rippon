@@ -34,6 +34,41 @@ export interface TunnelStatus {
   error: string | null
 }
 
+/** One entry in a remote directory listing. */
+export interface RemoteEntry {
+  name: string
+  type: 'dir' | 'file' | 'link' | 'other'
+  /** Whether following it lands on a directory — a symlink to one opens like one. */
+  isDir: boolean
+  size: number
+  /** Seconds since the epoch, as the remote host reports them. */
+  mtime: number
+}
+
+export interface RemoteListing {
+  /** Where `cd` actually landed: absolute, with ~ and .. already resolved. */
+  path: string
+  entries: RemoteEntry[]
+  /** True when the directory held more entries than the browser will carry. */
+  truncated: boolean
+}
+
+/**
+ * The head of a remote file, classified.
+ *
+ * `binary` carries no content on purpose — there is nothing useful to show, and
+ * shipping the bytes to draw mojibake with would only make the dialog slower.
+ */
+export interface RemotePreview {
+  path: string
+  size: number
+  /** True when the file is longer than the slice that was fetched. */
+  truncated: boolean
+  kind: 'text' | 'image' | 'binary'
+  /** Text for `text`, a data URI for `image`, empty for `binary`. */
+  content: string
+}
+
 /** Which part of the app produced a log entry. */
 export type ActivitySource = 'ssh' | 'tmux' | 'profile' | 'tunnel' | 'pane'
 

@@ -216,6 +216,7 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 | `⌘1`–`⌘9` | jump to tab |
 | `⌃Tab` / `⌃⇧Tab` | cycle tabs |
 | `⌘⇧L` | refresh session list now (also retries a down host immediately) |
+| `⌘⇧F` | browse the host's files — preview and download |
 | `⌘L` | focus the address bar |
 | `⌘J` | focus the terminal |
 | `⌘F` | find in the pane you were last in — page text, or terminal scrollback |

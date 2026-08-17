@@ -10,6 +10,7 @@ import {
 } from 'react'
 import TerminalPane, { type TerminalHandle } from './TerminalPane'
 import BrowserPane, { type BrowserHandle } from './BrowserPane'
+import FileBrowser from './FileBrowser'
 import SshSettings from './SshSettings'
 import {
   CloseSessionDialog,
@@ -83,6 +84,7 @@ const IDLE_CONN: Conn = { state: 'idle', error: null, attempt: 0, retryAt: null 
 
 type Dialog =
   | { kind: 'settings' }
+  | { kind: 'files' }
   | { kind: 'new-session' }
   | { kind: 'rename-session'; name: string }
   | { kind: 'close-session'; name: string }
@@ -868,6 +870,10 @@ export default function App(): JSX.Element {
       if (!loadedRef.current) {
         if (action === 'menu:refresh') retryNow()
         else if (action === 'menu:settings') setDialog({ kind: 'settings' })
+        // The file browser reads the local ssh config, not the profile, so it is
+        // reachable from the connect screen too — the host may well be up even
+        // when the profile read is what failed.
+        else if (action === 'menu:files') setDialog({ kind: 'files' })
         return
       }
 
@@ -886,6 +892,8 @@ export default function App(): JSX.Element {
           return setDialog({ kind: 'new-view' })
         case 'menu:settings':
           return setDialog({ kind: 'settings' })
+        case 'menu:files':
+          return setDialog({ kind: 'files' })
         case 'menu:refresh':
           // Also the way out of a long backoff from the keyboard.
           return retryNow()
@@ -1332,6 +1340,10 @@ export default function App(): JSX.Element {
             : null}
         </main>
       </div>
+
+      {dialog?.kind === 'files' ? (
+        <FileBrowser host={config.ssh.host} onClose={() => setDialog(null)} />
+      ) : null}
 
       {ctx ? <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} /> : null}
 

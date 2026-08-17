@@ -1625,3 +1625,270 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ── Remote file browser ──────────────────────────────────────────────────
+   Wider than the other dialogs because it is two panes, and the listing is
+   worth nothing if the names are cut off. Fixed height rather than fitting the
+   content: a directory of three files and one of three thousand should not
+   resize the window between them. */
+
+.files-modal {
+  width: min(1040px, 92vw);
+  height: min(680px, 86vh);
+  max-height: none;
+  overflow: hidden;
+  gap: 10px;
+}
+
+.files-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.files-head h2 {
+  flex: 1;
+}
+
+.files-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.files-close:hover {
+  color: var(--text);
+}
+
+.files-path {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.files-path input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.files-path button,
+.files-preview-head button,
+.files-saved button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.files-path button:hover:not(:disabled),
+.files-preview-head button:hover:not(:disabled),
+.files-saved button:hover {
+  color: var(--text);
+  border-color: #3a414d;
+}
+
+.files-path button:disabled,
+.files-preview-head button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.files-up {
+  min-width: 30px;
+}
+
+.files-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 44%) 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+
+.files-list,
+.files-preview {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.files-preview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.files-empty {
+  padding: 12px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.files-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 3px 10px;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.files-row:hover {
+  background: rgba(122, 162, 247, 0.08);
+}
+
+.files-row-selected {
+  background: rgba(122, 162, 247, 0.16);
+}
+
+.files-icon {
+  color: #6b7280;
+}
+
+.files-icon-dir {
+  color: var(--accent);
+}
+
+.files-icon-link {
+  color: #7dcfff;
+}
+
+.files-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-size,
+.files-date {
+  color: #6b7280;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.files-date {
+  min-width: 76px;
+  text-align: right;
+}
+
+.files-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.files-preview-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.files-preview-size {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.files-progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 10px 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+}
+
+.files-progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgba(122, 162, 247, 0.18);
+  transition: width 0.12s linear;
+}
+
+.files-progress span {
+  position: relative;
+}
+
+.files-saved {
+  margin: 8px 10px 0;
+  padding: 6px 8px;
+  border: 1px solid #2f4a2a;
+  border-radius: 4px;
+  color: var(--ok);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.files-saved code {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files-truncated {
+  padding: 6px 10px;
+  color: var(--warn);
+  font-size: 10.5px;
+}
+
+.files-text {
+  flex: 1;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre;
+}
+
+.files-image {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.files-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: repeating-conic-gradient(#1b1e24 0% 25%, #14161a 0% 50%) 50% / 16px 16px;
+}
+
+.files-error {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
