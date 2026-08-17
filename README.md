@@ -90,6 +90,7 @@ so a browser login done in either applies to both.
 | **+ → New session…** | `tmux new-session -d -s <name>` |
 | **Double-click a tab** | `tmux rename-session` |
 | **× on a tab** | asks first — see below |
+| **Clicking the `⇄` chip** | restarts the port forwards |
 | Opening a tab | `ssh -tt host tmux -u new-session -A -s <name>` |
 | Every 5s, on window focus, and on reconnect | `tmux list-sessions` |
 
@@ -166,6 +167,15 @@ moment the host answers, the profile loads and the workspace appears.
 
 Once it is up, losing the connection is only a strip along the top: the panes and their scrollback
 stay, and saving keeps working, because from that point the profile in memory *is* the host's.
+
+A connection that *hangs* rather than drops is the harder case — a VPN re-route or a sleep leaves the
+shared ssh connection alive at the kernel level but carrying nothing, and everything that rides it
+blocks forever. So while the window is focused and the screen unlocked, a health check probes the
+connection every 10s; two silent probes in a row and it tears the connection down so the next call
+builds a fresh one, restarting the port forwards that rode it. It also puts the forwarder back up if
+it has exited. All of it shows up in **SSH activity**. Nothing runs while the app is in the
+background or the machine is locked, and a host that is merely unreachable answers promptly with a
+reason, so it is never mistaken for a hang.
 
 Profile reads/writes ride the same multiplexed connection as everything else (writes are atomic:
 temp file then rename), and the local file is watched by polling so a Drive/Dropbox sync that swaps

@@ -84,6 +84,8 @@ const api = {
   tunnel: {
     sync: (ssh: SshConfig): Promise<void> => ipcRenderer.invoke('tunnel:sync', ssh),
     status: (): Promise<TunnelStatus> => ipcRenderer.invoke('tunnel:status'),
+    /** Tear the forwards down and bring them straight back up. */
+    restart: (): Promise<void> => ipcRenderer.invoke('tunnel:restart'),
     onStatus: (cb: (status: TunnelStatus) => void) => on<[TunnelStatus]>('tunnel:status', cb),
     /** Whether the forwarder is running with -v. Session-only, not persisted. */
     verbose: (): Promise<boolean> => ipcRenderer.invoke('tunnel:verbose'),

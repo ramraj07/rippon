@@ -30,6 +30,19 @@ export class TunnelManager extends EventEmitter {
     return this.verbose
   }
 
+  /** Whether a forwarder ought to be up: a host, and something to forward. */
+  wants(): boolean {
+    return !!this.last?.host && (this.last.tunnels ?? []).length > 0
+  }
+
+  /**
+   * Bring the forwards back on the config they were last synced with — the
+   * health monitor's repair, and what the toolbar chip does when clicked.
+   */
+  restart(): void {
+    if (this.last) this.sync(this.last)
+  }
+
   /**
    * Restart the forwarder with or without `-v`.
    *

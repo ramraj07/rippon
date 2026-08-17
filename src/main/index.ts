@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  powerMonitor,
   session,
   shell,
   type MenuItemConstructorOptions,
@@ -15,6 +16,7 @@ import { activity } from './activity'
 import { BROWSER_PARTITION, BrowserViews } from './browser'
 import { ConfigStore } from './config'
 import { downloadFile, listDir, previewFile } from './files'
+import { HealthMonitor } from './health'
 import {
   createProfile,
   deleteProfile,
@@ -53,6 +55,28 @@ const ptys = new PtyManager()
 const browsers = new BrowserViews()
 const tunnels = new TunnelManager()
 let mainWindow: BrowserWindow | null = null
+/**
+ * Whether the screen is locked or the machine asleep. Tracked rather than
+ * queried because there is no "is it locked" to ask — only the transitions.
+ */
+let screenLocked = false
+/**
+ * Only supervise the connection while someone is actually looking at the app.
+ * A backgrounded window on a locked laptop has nothing to gain from a live
+ * connection, and repairing one there would drop panes nobody is watching.
+ */
+const health = new HealthMonitor(
+  () => configStore.current.ssh,
+  tunnels,
+  () =>
+    !shuttingDown &&
+    !screenLocked &&
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized() &&
+    mainWindow.isFocused()
+)
 /**
  * Set the moment teardown starts. The render frame is disposed before the
  * window reports itself destroyed, and webContents.send logs its own error
@@ -654,6 +678,8 @@ function registerIpc(): void {
 
   ipcMain.handle('tunnel:sync', (_e, ssh: SshConfig) => tunnels.sync(ssh))
   ipcMain.handle('tunnel:status', () => tunnels.status())
+  // What the toolbar chip does: tear the forwards down and put them back up.
+  ipcMain.handle('tunnel:restart', () => tunnels.restart())
   ipcMain.handle('tunnel:verbose', () => tunnels.isVerbose())
   ipcMain.handle('tunnel:set-verbose', (_e, verbose: boolean) => tunnels.setVerbose(verbose))
 
@@ -746,6 +772,30 @@ app.whenReady().then(() => {
   registerIpc()
   buildMenu()
   createWindow()
+  health.start()
+
+  /*
+   * Coming back to the app is when a stale connection surfaces and when it is
+   * least welcome, so each of these checks immediately instead of waiting out
+   * the interval. Waking from sleep is the likeliest wedge of all: the laptop
+   * returns on a different network with its old TCP connections still nominally
+   * established.
+   */
+  app.on('browser-window-focus', () => health.wake())
+  powerMonitor.on('unlock-screen', () => {
+    screenLocked = false
+    health.wake()
+  })
+  powerMonitor.on('resume', () => {
+    screenLocked = false
+    health.wake()
+  })
+  powerMonitor.on('lock-screen', () => {
+    screenLocked = true
+  })
+  powerMonitor.on('suspend', () => {
+    screenLocked = true
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -757,6 +807,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  health.stop()
   beginShutdown()
   configStore.dispose()
 })

@@ -152,13 +152,35 @@ export interface RemoteOptions {
  * refused, ConnectTimeout — promptly and on stderr. Being killed while silent
  * means it was waiting on something that was never going to answer.
  */
-function wedged(err: unknown): boolean {
+export function wedged(err: unknown): boolean {
   const e = err as { killed?: boolean; signal?: string }
   return e.killed === true || e.signal === 'SIGTERM'
 }
 
+/**
+ * The cheapest honest round trip: does a command actually complete over the
+ * shared connection, and how long does it take?
+ *
+ * `ssh -O check` is not a substitute — it asks the local master process whether
+ * it is alive, never touching the network, so a master whose connection died
+ * still answers "Master running". Only running something and getting output back
+ * distinguishes a working connection from a hung one.
+ *
+ * Its own ConnectTimeout comes first, and ssh takes the first value it is given
+ * for an option, so this overrides the longer one in controlArgs: a host that is
+ * merely unreachable must fail quickly and visibly, rather than being killed by
+ * the caller's timeout and mistaken for a hang.
+ */
+export async function probe(ssh: SshConfig, timeoutMs: number): Promise<number> {
+  const started = Date.now()
+  await exec('ssh', ['-o', 'ConnectTimeout=4', ...controlArgs(), ...ssh.args, ssh.host, 'true'], {
+    timeout: timeoutMs
+  })
+  return Date.now() - started
+}
+
 /** Ask the multiplexing master to exit. Best-effort: a failure here is fine. */
-async function resetMaster(ssh: SshConfig): Promise<void> {
+export async function resetMaster(ssh: SshConfig): Promise<void> {
   try {
     await exec('ssh', [...controlArgs(), ...ssh.args, '-O', 'exit', ssh.host], { timeout: 5000 })
     activity.add('ssh', 'info', 'shared connection torn down (-O exit)')

@@ -1069,8 +1069,8 @@ export default function App(): JSX.Element {
                 : tunnelStatus?.forwards.length
                   ? `Forwarding:\n${tunnelStatus.forwards.join('\n')}`
                   : 'Port forwards configured'
-            }\nClick to manage`}
-            onClick={() => setDialog({ kind: 'settings' })}
+            }\nClick to restart the forwards — the host chip manages them`}
+            onClick={() => void window.rippon.tunnel.restart()}
           >
             ⇄ {config.ssh.tunnels.length}
           </button>
