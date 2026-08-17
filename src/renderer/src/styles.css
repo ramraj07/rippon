@@ -1892,3 +1892,35 @@ body {
   font-size: 11.5px;
   white-space: pre-wrap;
 }
+
+/* ── tmux mouse-mode chip ─────────────────────────────────────────────────
+   Sits beside the port-forward chip and reads the same way: state in the
+   colour, detail in the tooltip. Mouse mode is a tmux server option, so this
+   one control speaks for every tab at once. */
+
+.mouse-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.mouse-chip:hover {
+  color: var(--text);
+  border-color: #3a414d;
+}
+
+.mouse-chip-on {
+  color: var(--accent);
+  border-color: #2f3a52;
+}
+
+.mouse-chip-off {
+  color: #6b7280;
+}

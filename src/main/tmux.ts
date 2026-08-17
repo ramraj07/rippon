@@ -341,6 +341,37 @@ export async function killSession(ssh: SshConfig, name: string): Promise<void> {
   }
 }
 
+/**
+ * Whether tmux is grabbing the mouse.
+ *
+ * A server-wide option, not a per-session one, so this is the state of every tab
+ * at once — and null when there is no server yet, since there is then nothing to
+ * read and nothing to set. The terminal already adapts to whichever way this
+ * lands: xterm marks a grabbed mouse with `enable-mouse-events`, which is what
+ * makes ⌥-drag and the buffer copies in the context menu behave.
+ */
+export async function getMouseMode(ssh: SshConfig): Promise<boolean | null> {
+  try {
+    const out = await remote(ssh, 'tmux show -gv mouse', {
+      source: 'tmux',
+      label: 'show mouse',
+      summarise: (s) => s.trim() || 'unset'
+    })
+    return out.trim() === 'on'
+  } catch (err) {
+    const text = err instanceof Error ? err.message : String(err)
+    if (/no server running/i.test(text)) return null
+    throw err
+  }
+}
+
+export async function setMouseMode(ssh: SshConfig, on: boolean): Promise<void> {
+  await remote(ssh, `tmux set -g mouse ${on ? 'on' : 'off'}`, {
+    source: 'tmux',
+    label: `mouse ${on ? 'on' : 'off'}`
+  })
+}
+
 export async function renameSession(ssh: SshConfig, from: string, to: string): Promise<void> {
   assertName(from)
   assertName(to)

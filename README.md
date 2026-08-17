@@ -91,6 +91,7 @@ so a browser login done in either applies to both.
 | **Double-click a tab** | `tmux rename-session` |
 | **× on a tab** | asks first — see below |
 | **Clicking the `⇄` chip** | restarts the port forwards |
+| **Clicking the `⇱` chip** | `tmux set -g mouse on\|off` |
 | Opening a tab | `ssh -tt host tmux -u new-session -A -s <name>` |
 | Every 5s, on window focus, and on reconnect | `tmux list-sessions` |
 

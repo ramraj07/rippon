@@ -119,6 +119,8 @@ export default function App(): JSX.Element {
   /** A one-off problem worth mentioning — a bad config file, a failed save. */
   const [notice, setNotice] = useState<string | null>(null)
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null)
+  /** tmux's server-wide mouse mode; null until a tmux server exists to ask. */
+  const [mouseMode, setMouseMode] = useState<boolean | null>(null)
   const [profiles, setProfiles] = useState<string[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
   const [ctx, setCtx] = useState<Ctx>(null)
@@ -359,6 +361,34 @@ export default function App(): JSX.Element {
   const failed = useCallback((title: string, detail: string) => {
     setDialog({ kind: 'error', title, detail })
   }, [])
+
+  /*
+   * tmux's mouse mode, mirrored in the toolbar.
+   *
+   * It is a server-wide option rather than a per-session one, so this one chip
+   * is the state of every tab at once. Null means no tmux server is running yet,
+   * and then there is nothing to read or set — the chip stays out of the way.
+   */
+  const refreshMouse = useCallback(async () => {
+    const result = await window.rippon.tmux.mouseMode()
+    setMouseMode(result.ok ? result.value : null)
+  }, [])
+
+  useEffect(() => {
+    if (loaded) void refreshMouse()
+  }, [loaded, refreshMouse])
+
+  const toggleMouse = useCallback(async () => {
+    const next = !mouseMode
+    // Optimistic, because the round trip is long enough to feel like a dead
+    // button otherwise; a failure puts it back to whatever the host really says.
+    setMouseMode(next)
+    const result = await window.rippon.tmux.setMouseMode(next)
+    if (!result.ok) {
+      failed('Could not change mouse mode', result.error)
+      void refreshMouse()
+    }
+  }, [mouseMode, failed, refreshMouse])
 
   // ---------- session actions ----------
 
@@ -1058,6 +1088,19 @@ export default function App(): JSX.Element {
           </button>
         </div>
         <span className="spacer" />
+        {mouseMode !== null ? (
+          <button
+            className={`mouse-chip mouse-chip-${mouseMode ? 'on' : 'off'}`}
+            title={
+              mouseMode
+                ? 'tmux mouse mode is ON — tmux gets scroll and clicks.\nHold ⌥ to select text. Click to turn off.'
+                : 'tmux mouse mode is OFF — selection and scroll are the terminal\u2019s.\nClick to turn on.'
+            }
+            onClick={() => void toggleMouse()}
+          >
+            ⇱ {mouseMode ? 'on' : 'off'}
+          </button>
+        ) : null}
         {config.ssh.tunnels.length ? (
           <button
             className={`tunnel-chip tunnel-chip-${

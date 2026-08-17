@@ -26,7 +26,14 @@ import {
   writeProfile
 } from './profiles'
 import { PtyManager } from './pty'
-import { createSession, killSession, listSessions, renameSession } from './tmux'
+import {
+  createSession,
+  getMouseMode,
+  killSession,
+  listSessions,
+  renameSession,
+  setMouseMode
+} from './tmux'
 import { TunnelManager } from './tunnel'
 import {
   defaultProfile,
@@ -678,6 +685,11 @@ function registerIpc(): void {
 
   ipcMain.handle('tunnel:sync', (_e, ssh: SshConfig) => tunnels.sync(ssh))
   ipcMain.handle('tunnel:status', () => tunnels.status())
+  ipcMain.handle('tmux:mouse', () => attempt(() => getMouseMode(configStore.current.ssh)))
+  ipcMain.handle('tmux:set-mouse', (_e, on: boolean) =>
+    attempt(() => setMouseMode(configStore.current.ssh, on))
+  )
+
   // What the toolbar chip does: tear the forwards down and put them back up.
   ipcMain.handle('tunnel:restart', () => tunnels.restart())
   ipcMain.handle('tunnel:verbose', () => tunnels.isVerbose())

@@ -69,7 +69,10 @@ const api = {
     kill: (ssh: SshConfig, name: string): Promise<Result<void>> =>
       ipcRenderer.invoke('tmux:kill', ssh, name),
     rename: (ssh: SshConfig, from: string, to: string): Promise<Result<void>> =>
-      ipcRenderer.invoke('tmux:rename', ssh, from, to)
+      ipcRenderer.invoke('tmux:rename', ssh, from, to),
+    /** Server-wide mouse mode; null when no tmux server is running yet. */
+    mouseMode: (): Promise<Result<boolean | null>> => ipcRenderer.invoke('tmux:mouse'),
+    setMouseMode: (on: boolean): Promise<Result<void>> => ipcRenderer.invoke('tmux:set-mouse', on)
   },
   pty: {
     attach: (id: string, ssh: SshConfig, session: string, cols: number, rows: number): Promise<void> =>
