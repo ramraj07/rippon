@@ -6,6 +6,12 @@ interface Props {
   detachHidden: boolean
   configPath: string
   tunnelStatus: TunnelStatus | null
+  /**
+   * Whether the host's profile is in hand. Everything on this form is local
+   * except "detach background sessions", which is a profile field — so while it
+   * is false that one option is not ours to offer, let alone save.
+   */
+  profileLoaded: boolean
   onSave(ssh: SshConfig, detachHidden: boolean): void
   onClose(): void
   onChoosePath(): void
@@ -53,6 +59,7 @@ export default function SshSettings({
   detachHidden,
   configPath,
   tunnelStatus,
+  profileLoaded,
   onSave,
   onClose,
   onChoosePath
@@ -218,14 +225,27 @@ export default function SshSettings({
           ) : null}
         </div>
 
-        <label className="checkbox">
-          <input type="checkbox" checked={detach} onChange={(e) => setDetach(e.target.checked)} />
-          Detach background sessions
-        </label>
-        <small className="checkbox-note">
-          Frees one ssh channel and the local scrollback per hidden tab, at the cost of a redraw
-          when you switch back. tmux keeps the session and its own scrollback either way.
-        </small>
+        {profileLoaded ? (
+          <>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={detach}
+                onChange={(e) => setDetach(e.target.checked)}
+              />
+              Detach background sessions
+            </label>
+            <small className="checkbox-note">
+              Frees one ssh channel and the local scrollback per hidden tab, at the cost of a redraw
+              when you switch back. tmux keeps the session and its own scrollback either way.
+            </small>
+          </>
+        ) : (
+          <small className="checkbox-note">
+            Session and layout options live in the profile on {host.trim() || 'the host'}, and appear
+            once it is connected.
+          </small>
+        )}
 
         <label>
           Config file

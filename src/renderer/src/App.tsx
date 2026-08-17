@@ -45,7 +45,41 @@ import {
 } from '@shared/types'
 
 const SAVE_DEBOUNCE_MS = 400
+/** How often to re-list sessions while the host is answering. */
 const POLL_MS = 5000
+const RETRY_BASE_MS = 1000
+const RETRY_MAX_MS = 30000
+
+/**
+ * Back off after a failed attempt: 1s, 2s, 4s … capped at 30s. A host that is
+ * booting, or a laptop that just woke, is usually reachable within the first few
+ * tries; anything longer is a real outage and does not deserve a busy loop.
+ */
+function retryDelay(attempt: number): number {
+  return Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1))
+}
+
+/**
+ * Where we stand with the host.
+ *
+ * `idle`   — no host configured yet, so there is nothing to reach.
+ * `connecting` — an attempt is in flight.
+ * `online` — the last attempt worked.
+ * `offline` — it did not, and another is scheduled.
+ */
+type ConnState = 'idle' | 'connecting' | 'online' | 'offline'
+
+interface Conn {
+  state: ConnState
+  /** Everything ssh had to say about the last failure, kept whole. */
+  error: string | null
+  /** Consecutive failures, for the backoff and for the status line. */
+  attempt: number
+  /** When the next automatic attempt fires, so the UI can count down to it. */
+  retryAt: number | null
+}
+
+const IDLE_CONN: Conn = { state: 'idle', error: null, attempt: 0, retryAt: null }
 
 type Dialog =
   | { kind: 'settings' }
@@ -71,8 +105,17 @@ export default function App(): JSX.Element {
   const [config, setConfig] = useState<RipponConfig>(() => normalizeConfig({}))
   const [configPath, setConfigPath] = useState('')
   const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [ready, setReady] = useState(false)
-  const [listError, setListError] = useState<string | null>(null)
+  /** The local config file is in hand, so the window can stop saying nothing. */
+  const [booted, setBooted] = useState(false)
+  /**
+   * The profile came off the host. Until it does, `config`'s layout half is a
+   * placeholder — every control that would write it stays out of reach, because
+   * saving a placeholder would erase the real profile on the box.
+   */
+  const [loaded, setLoaded] = useState(false)
+  const [conn, setConn] = useState<Conn>({ state: 'connecting', error: null, attempt: 0, retryAt: null })
+  /** A one-off problem worth mentioning — a bad config file, a failed save. */
+  const [notice, setNotice] = useState<string | null>(null)
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null)
   const [profiles, setProfiles] = useState<string[]>([])
   const [dialog, setDialog] = useState<Dialog>(null)
@@ -94,6 +137,9 @@ export default function App(): JSX.Element {
   /** Mirrors `config` for use inside stable callbacks and menu handlers. */
   const configRef = useRef(config)
   configRef.current = config
+  /** Mirrors `loaded`, so the sync loop and the menu handler can read it. */
+  const loadedRef = useRef(loaded)
+  loadedRef.current = loaded
 
   const view = config.views.find((v) => v.id === config.activeViewId) ?? config.views[0]
   const tiled = view.type === 'tiled'
@@ -145,36 +191,125 @@ export default function App(): JSX.Element {
     [commit]
   )
 
-  const refresh = useCallback(async () => {
-    const ssh = configRef.current.ssh
-    if (!ssh.host) {
-      setSessions([])
-      setListError(null)
-      return
-    }
-    const res = await window.rippon.tmux.list(ssh)
-    if (!res.ok) {
-      setListError(res.error)
-      return
-    }
-    setListError(null)
-    setSessions(res.value)
+  /** Take a fresh session list and prune the profile's references to dead ones. */
+  const adoptSessions = useCallback(
+    (list: SessionInfo[]) => {
+      setSessions(list)
+      // Only ever prune a profile we actually hold; a placeholder has nothing
+      // real to prune, and saving it would push it at the host.
+      if (!loadedRef.current) return
 
-    // Drop references to sessions that no longer exist remotely.
-    const names = new Set(res.value.map((s) => s.name))
-    const cur = configRef.current
-    let changed = false
-    const views = cur.views.map((v) => {
-      const hidden = v.hidden.filter((h) => names.has(h))
-      const tiles = v.tiles.map((t) => (t && names.has(t) ? t : null))
-      if (hidden.length !== v.hidden.length || tiles.some((t, i) => t !== v.tiles[i])) {
-        changed = true
-        return { ...v, hidden, tiles }
+      const names = new Set(list.map((s) => s.name))
+      const cur = configRef.current
+      let changed = false
+      const views = cur.views.map((v) => {
+        const hidden = v.hidden.filter((h) => names.has(h))
+        const tiles = v.tiles.map((t) => (t && names.has(t) ? t : null))
+        if (hidden.length !== v.hidden.length || tiles.some((t, i) => t !== v.tiles[i])) {
+          changed = true
+          return { ...v, hidden, tiles }
+        }
+        return v
+      })
+      if (changed) commit({ ...cur, views })
+    },
+    [commit]
+  )
+
+  /** Replace the whole in-memory config without re-persisting it. */
+  const applyConfig = useCallback((next: RipponConfig) => {
+    configRef.current = next
+    setConfig(next)
+  }, [])
+
+  // ---------- the connection loop ----------
+
+  /** An attempt is in flight; a second one would just queue behind its ssh. */
+  const syncing = useRef(false)
+  const attempts = useRef(0)
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Set from `sync` below; lets the timer call the current closure. */
+  const syncRef = useRef<() => Promise<void>>(async () => {})
+
+  const schedule = useCallback((ms: number) => {
+    if (syncTimer.current) clearTimeout(syncTimer.current)
+    syncTimer.current = setTimeout(() => void syncRef.current(), ms)
+  }, [])
+
+  /**
+   * One pass at the host: fetch the profile if we do not have it yet, then the
+   * session list. Reschedules itself — a steady poll while the host answers, a
+   * widening backoff while it does not — so recovery needs no button press: the
+   * moment the network comes back, an attempt is already on its way.
+   *
+   * Guarded, because these calls can hang for ssh's full 20-second timeout. The
+   * old fixed interval fired regardless and stacked up an ssh per tick, which is
+   * what made a flaky connection feel unrecoverable.
+   */
+  const sync = useCallback(async () => {
+    if (syncing.current) return
+    if (!configRef.current.ssh.host) {
+      setSessions([])
+      setConn(IDLE_CONN)
+      return
+    }
+    syncing.current = true
+    setConn((c) => ({ ...c, state: c.state === 'online' ? 'online' : 'connecting', retryAt: null }))
+    try {
+      if (!loadedRef.current) {
+        const res = await window.rippon.config.connect()
+        setConfigPath(res.path)
+        if (!res.loaded) {
+          throw new Error(res.error ?? 'The host did not hand over the profile.')
+        }
+        applyConfig(res.config)
+        setProfiles(res.profiles)
+        loadedRef.current = true
+        setLoaded(true)
       }
-      return v
-    })
-    if (changed) commit({ ...cur, views })
-  }, [commit])
+      const list = await window.rippon.tmux.list(configRef.current.ssh)
+      if (!list.ok) throw new Error(list.error)
+      adoptSessions(list.value)
+      attempts.current = 0
+      setConn({ state: 'online', error: null, attempt: 0, retryAt: null })
+      schedule(POLL_MS)
+    } catch (err) {
+      attempts.current += 1
+      const delay = retryDelay(attempts.current)
+      setConn({
+        state: 'offline',
+        error: err instanceof Error ? err.message : String(err),
+        attempt: attempts.current,
+        retryAt: Date.now() + delay
+      })
+      schedule(delay)
+    } finally {
+      syncing.current = false
+    }
+  }, [adoptSessions, applyConfig, schedule])
+  syncRef.current = sync
+
+  /** Try again now, from the top of the backoff. Harmless while one is running. */
+  const retryNow = useCallback(() => {
+    attempts.current = 0
+    if (syncTimer.current) clearTimeout(syncTimer.current)
+    // A healthy connection stays quiet: a manual refresh should not raise a
+    // "reconnecting" bar over a workspace that is working fine.
+    setConn((c) => (c.state === 'online' ? c : { ...c, state: 'connecting', retryAt: null }))
+    void sync()
+  }, [sync])
+
+  /**
+   * Pick up whatever the host has right now, outside the loop's schedule. Used
+   * after an action we just took there, where waiting for the next tick would
+   * leave the tab strip a step behind.
+   */
+  const refresh = useCallback(async () => {
+    if (!configRef.current.ssh.host || !loadedRef.current) return
+    const list = await window.rippon.tmux.list(configRef.current.ssh)
+    if (!list.ok) return
+    adoptSessions(list.value)
+  }, [adoptSessions])
 
   const selectSession = useCallback(
     (name: string) => {
@@ -450,41 +585,32 @@ export default function App(): JSX.Element {
 
   // ---------- profiles ----------
 
-  /** Replace the whole in-memory config without re-persisting it. */
-  const applyConfig = useCallback((next: RipponConfig) => {
-    configRef.current = next
-    setConfig(next)
-  }, [])
-
-  /** Re-fetch the active profile from the host — used to retry after it was down. */
-  const reload = useCallback(async () => {
-    const res = await window.rippon.config.reload()
-    applyConfig(res.config)
-    setProfiles(res.profiles)
-    setListError(res.error)
-    await refresh()
-  }, [applyConfig, refresh])
-
   const saveSettings = useCallback(
     async (ssh: SshConfig, detachHidden: boolean) => {
       setDialog(null)
       const cur = configRef.current
       const hostChanged =
         ssh.host !== cur.ssh.host || ssh.args.join(' ') !== cur.ssh.args.join(' ')
-      if (hostChanged) {
-        // Save the connection change, then load the *new* host's profile rather
-        // than pushing this host's layout onto it. detachHidden follows the
-        // profile, so it comes from the new host, not this dialog.
+      if (hostChanged || !loadedRef.current) {
+        /*
+         * Only the connection half is ours to write here. A new host has its own
+         * profile to fetch rather than have this one pushed onto it, and while we
+         * are still locked there is no profile to write at all — detachHidden
+         * lives in one, so it comes from the host, not from this dialog.
+         */
         applyConfig({ ...cur, ssh })
         await window.rippon.config.saveLocal(ssh, cur.activeProfile)
-        await reload()
+        loadedRef.current = false
+        setLoaded(false)
+        setSessions([])
+        retryNow()
       } else {
-        // Same host: ordinary autosave, including detachHidden into the profile.
+        // Same host, profile in hand: ordinary autosave, detachHidden included.
         commit({ ...cur, ssh, detachHidden })
         void refresh()
       }
     },
-    [applyConfig, commit, reload, refresh]
+    [applyConfig, commit, refresh, retryNow]
   )
 
   const useProfile = useCallback(
@@ -498,7 +624,6 @@ export default function App(): JSX.Element {
       }
       setProfiles(res.value.profiles)
       applyConfig(res.value.config)
-      setListError(null)
       await refresh()
     },
     [applyConfig, failed, refresh]
@@ -651,42 +776,66 @@ export default function App(): JSX.Element {
 
   // ---------- effects ----------
 
+  /*
+   * Boot from the local file. It names the host and the profile and needs no
+   * network, so it lands immediately — the window shows where it is going rather
+   * than an empty workspace that reads like nothing is configured. Fetching the
+   * profile off the host is the connection loop's job from here.
+   */
   useEffect(() => {
-    void window.rippon.config.get().then(({ config: cfg, path, profiles: profs, error }) => {
-      configRef.current = cfg
-      setConfig(cfg)
-      setConfigPath(path)
-      setProfiles(profs)
-      setReady(true)
-      if (error) setListError(error)
-      if (!cfg.ssh.host) setDialog({ kind: 'settings' })
-      void refresh()
+    void window.rippon.config.get().then((res) => {
+      applyConfig(res.config)
+      setConfigPath(res.path)
+      setProfiles(res.profiles)
+      setLoaded(res.loaded)
+      loadedRef.current = res.loaded
+      setBooted(true)
+      if (!res.config.ssh.host) {
+        setConn(IDLE_CONN)
+        setDialog({ kind: 'settings' })
+        return
+      }
+      void syncRef.current()
     })
 
-    const offConfig = window.rippon.config.onChanged((cfg, path, profs) => {
-      configRef.current = cfg
-      setConfig(cfg)
+    // The local file changed — a different config file, or an edit on disk. It
+    // carries the host, so the profile has to come down again.
+    const offConfig = window.rippon.config.onChanged((cfg, path, profs, isLoaded) => {
+      applyConfig(cfg)
       setConfigPath(path)
       setProfiles(profs)
-      void refresh()
+      setLoaded(isLoaded)
+      loadedRef.current = isLoaded
+      if (!isLoaded) setSessions([])
+      // A different host deserves a fresh run at it, not the last one's backoff.
+      attempts.current = 0
+      void syncRef.current()
     })
-    const offError = window.rippon.onError(setListError)
+    const offError = window.rippon.onError(setNotice)
     return () => {
       offConfig()
       offError()
+      if (syncTimer.current) clearTimeout(syncTimer.current)
     }
-  }, [refresh])
+  }, [applyConfig])
 
-  // Keep the session list in step with the host.
+  /*
+   * Nudge the loop when something suggests the host is worth another try right
+   * now: the window came forward, or this machine got its network back. Both
+   * beat sitting out the rest of a 30-second backoff.
+   */
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), POLL_MS)
-    const onFocus = (): void => void refresh()
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener('focus', onFocus)
+    const wake = (): void => {
+      if (conn.state === 'offline') retryNow()
+      else void sync()
     }
-  }, [refresh])
+    window.addEventListener('focus', wake)
+    window.addEventListener('online', wake)
+    return () => {
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', wake)
+    }
+  }, [conn.state, retryNow, sync])
 
   // Follow the tunnel forwarder's state, seeded with whatever it is doing now.
   useEffect(() => {
@@ -711,6 +860,17 @@ export default function App(): JSX.Element {
     return window.rippon.onMenu((action, payload) => {
       const name = activeName
 
+      /*
+       * Nothing but the connection itself is available until the profile is in
+       * hand: every other action here either edits the profile or acts on a
+       * session we have not been told about yet.
+       */
+      if (!loadedRef.current) {
+        if (action === 'menu:refresh') retryNow()
+        else if (action === 'menu:settings') setDialog({ kind: 'settings' })
+        return
+      }
+
       /** The pane ⌘F applies to: whichever last had focus, if it is still there. */
       const findable = (): TerminalHandle | BrowserHandle | null => {
         if (!name) return null
@@ -727,7 +887,8 @@ export default function App(): JSX.Element {
         case 'menu:settings':
           return setDialog({ kind: 'settings' })
         case 'menu:refresh':
-          return void refresh()
+          // Also the way out of a long backoff from the keyboard.
+          return retryNow()
         case 'menu:zoom': {
           const step = typeof payload === 'number' ? payload : 0
           return updateView((v) => ({
@@ -768,7 +929,7 @@ export default function App(): JSX.Element {
           return findable()?.stepFind(payload === -1 ? -1 : 1)
       }
     })
-  }, [activeName, indexed, refresh, selectSession, selectView, updateView])
+  }, [activeName, indexed, refresh, retryNow, selectSession, selectView, updateView])
 
   // ---------- render ----------
 
@@ -793,6 +954,67 @@ export default function App(): JSX.Element {
   const editingView = dialog?.kind === 'edit-view' ? config.views.find((v) => v.id === dialog.id) : null
   // Browser views are native and paint over the page, so they hide behind any overlay.
   const overlayOpen = dialog !== null || ctx !== null
+
+  /*
+   * Views, tiles, tabs and bookmarks all live in the profile on the host, so
+   * until it has handed one over there is no workspace to draw — only a
+   * placeholder we made up. Showing that would be worse than showing nothing:
+   * the first thing the user dragged would be saved back over the real profile.
+   * So this is a whole separate screen, and the only things on it are the
+   * connection, the settings that define it, and how the retrying is going.
+   */
+  if (!loaded) {
+    return (
+      <div className="app">
+        <header className="titlebar">
+          <span className="wordmark">Rippon</span>
+          <span className="titlebar-note">
+            {conn.state === 'idle'
+              ? 'no host configured'
+              : `profile “${config.activeProfile}” on ${config.ssh.host}`}
+          </span>
+          <span className="spacer" />
+          <button
+            className="host-btn"
+            title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
+            onClick={() => setDialog({ kind: 'settings' })}
+          >
+            {config.ssh.host || 'set up SSH…'} ⚙
+          </button>
+        </header>
+
+        {notice ? (
+          <div className="error-bar">
+            <span className="error-text-body">{notice}</span>
+            <button onClick={() => setNotice(null)}>×</button>
+          </div>
+        ) : null}
+
+        <ConnectScreen
+          booted={booted}
+          host={config.ssh.host}
+          profile={config.activeProfile}
+          configPath={configPath}
+          conn={conn}
+          onRetry={retryNow}
+          onSettings={() => setDialog({ kind: 'settings' })}
+        />
+
+        {dialog?.kind === 'settings' ? (
+          <SshSettings
+            ssh={config.ssh}
+            detachHidden={config.detachHidden}
+            configPath={configPath}
+            tunnelStatus={tunnelStatus}
+            profileLoaded={false}
+            onSave={saveSettings}
+            onClose={() => setDialog(null)}
+            onChoosePath={() => void window.rippon.config.choosePath()}
+          />
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -854,12 +1076,27 @@ export default function App(): JSX.Element {
         </button>
       </header>
 
-      {listError ? (
+      {notice ? (
         <div className="error-bar">
-          <span className="error-text-body">{listError}</span>
-          <button onClick={() => void reload()}>retry</button>
-          <button onClick={() => setListError(null)}>×</button>
+          <span className="error-text-body">{notice}</span>
+          <button onClick={() => setNotice(null)}>×</button>
         </div>
+      ) : null}
+
+      {/*
+        Once the layout is up, a connection that drops is a strip along the top
+        rather than a takeover: the panes and their scrollback are still worth
+        looking at, and the loop is already working on getting back.
+      */}
+      {loaded && conn.state !== 'online' && conn.state !== 'idle' ? (
+        <ConnectionBar
+          host={config.ssh.host}
+          conn={conn}
+          onRetry={retryNow}
+          onDetails={() =>
+            conn.error ? failed(`Cannot reach ${config.ssh.host}`, conn.error) : undefined
+          }
+        />
       ) : null}
 
       {view.type === 'tabs-horizontal' ? (
@@ -1002,18 +1239,19 @@ export default function App(): JSX.Element {
         ) : null}
 
         <main className={`panes ${tiled ? 'panes-grid' : 'panes-stack'}`} style={paneLayerStyle}>
-          {ready && !sessions.length ? (
+          {/*
+            Genuinely empty, or merely out of touch — the two used to look
+            identical, and "no sessions" is a lie while the host is unreachable.
+          */}
+          {!sessions.length ? (
             <div className="empty">
-              {!config.ssh.host ? (
-                <>
-                  No host configured.
-                  <button onClick={() => setDialog({ kind: 'settings' })}>Set up SSH</button>
-                </>
-              ) : (
+              {conn.state === 'online' ? (
                 <>
                   No tmux sessions on {config.ssh.host}.
                   <button onClick={() => setDialog({ kind: 'new-session' })}>Create one</button>
                 </>
+              ) : (
+                <>Waiting for {config.ssh.host}…</>
               )}
             </div>
           ) : null}
@@ -1103,6 +1341,7 @@ export default function App(): JSX.Element {
           detachHidden={config.detachHidden}
           configPath={configPath}
           tunnelStatus={tunnelStatus}
+          profileLoaded
           onSave={saveSettings}
           onClose={() => setDialog(null)}
           onChoosePath={() => void window.rippon.config.choosePath()}
@@ -1222,6 +1461,151 @@ export default function App(): JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Seconds left on the clock, ticking, or null when nothing is scheduled. The
+ * countdown is the point: a bare "retry" button gives no sign that anything is
+ * happening, so a connection that comes back on its own looks like one that
+ * needed rescuing.
+ */
+function useCountdown(retryAt: number | null): number | null {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (retryAt === null) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 500)
+    return () => clearInterval(timer)
+  }, [retryAt])
+  if (retryAt === null) return null
+  return Math.max(0, Math.ceil((retryAt - now) / 1000))
+}
+
+function attemptLabel(attempt: number): string {
+  return attempt > 1 ? ` · attempt ${attempt}` : ''
+}
+
+interface ConnectionBarProps {
+  host: string
+  conn: Conn
+  onRetry(): void
+  onDetails(): void
+}
+
+/** The strip shown when a working session loses the host. */
+function ConnectionBar({ host, conn, onRetry, onDetails }: ConnectionBarProps): JSX.Element {
+  const secs = useCountdown(conn.retryAt)
+  const trying = conn.state === 'connecting'
+  return (
+    <div className={`conn-bar ${conn.state === 'offline' ? 'conn-bar-error' : ''}`}>
+      <span className={`conn-dot conn-dot-${trying ? 'trying' : conn.state}`} />
+      <span className="conn-text">
+        {trying
+          ? `Reconnecting to ${host}…`
+          : `Lost the connection to ${host}${secs !== null ? ` — retrying in ${secs}s` : ''}${attemptLabel(conn.attempt)}`}
+      </span>
+      {conn.error ? <button onClick={onDetails}>details</button> : null}
+      <button disabled={trying} onClick={onRetry}>
+        {trying ? 'trying…' : 'retry now'}
+      </button>
+    </div>
+  )
+}
+
+interface ConnectScreenProps {
+  booted: boolean
+  host: string
+  profile: string
+  configPath: string
+  conn: Conn
+  onRetry(): void
+  onSettings(): void
+}
+
+/**
+ * What the window shows before the host has handed over a profile: where it is
+ * connecting, how that is going, and nothing that could be mistaken for a
+ * workspace — there is no layout to draw yet, and inventing one is how a real
+ * profile gets overwritten.
+ */
+function ConnectScreen({
+  booted,
+  host,
+  profile,
+  configPath,
+  conn,
+  onRetry,
+  onSettings
+}: ConnectScreenProps): JSX.Element {
+  const secs = useCountdown(conn.retryAt)
+  const trying = conn.state === 'connecting'
+
+  if (!booted) {
+    // The local file is a plain read; this is a frame or two, not a splash.
+    return (
+      <div className="connect-screen">
+        <div className="connect-card">
+          <span className="connect-spinner" />
+          <p className="connect-line">Reading your config…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (conn.state === 'idle' || !host) {
+    return (
+      <div className="connect-screen">
+        <div className="connect-card">
+          <h2 className="connect-title">No host yet</h2>
+          <p className="connect-line">
+            Rippon works one SSH host at a time. Its tabs are the tmux sessions running there, and
+            your views and bookmarks are stored on the box itself.
+          </p>
+          <div className="connect-actions">
+            <button className="primary" onClick={onSettings}>
+              Set up SSH
+            </button>
+          </div>
+          <p className="connect-path">{configPath.replace(/^\/Users\/[^/]+/, '~')}</p>
+        </div>
+      </div>
+    )
+  }
+
+  /*
+   * The last failure stays on screen through the next attempt. Swapping it out
+   * for a spinner every few seconds and back again was the worst of both: no
+   * reason visible long enough to read, and no sense of progress either.
+   */
+  return (
+    <div className="connect-screen">
+      <div className="connect-card">
+        {trying ? <span className="connect-spinner" /> : null}
+        <h2 className={`connect-title ${conn.error ? 'connect-title-error' : ''}`}>
+          {conn.error ? `Can’t reach ${host}` : `Connecting to ${host}`}
+        </h2>
+        <p className="connect-line">
+          {conn.error
+            ? `Still waiting for profile “${profile}”. Nothing here is editable until it arrives, so an unreachable host can never cost you the layout stored on it.`
+            : `Loading profile “${profile}” — your views, tabs and bookmarks live on the host.`}
+        </p>
+        {conn.error ? <pre className="connect-error">{conn.error}</pre> : null}
+
+        <div className="connect-actions">
+          <button className="primary" disabled={trying} onClick={onRetry}>
+            {trying ? 'Connecting…' : 'Retry now'}
+          </button>
+          <button onClick={onSettings}>SSH settings…</button>
+        </div>
+
+        <p className="connect-status">
+          {trying
+            ? `Trying now${attemptLabel(conn.attempt + 1)} — ssh gets up to 20s.`
+            : `Retrying automatically${secs !== null ? ` in ${secs}s` : ''}${attemptLabel(conn.attempt)}.`}
+        </p>
+      </div>
     </div>
   )
 }

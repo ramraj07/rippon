@@ -29,18 +29,26 @@ interface ConfigPayload {
   profiles: string[]
   /** Non-null when the active profile could not be loaded (host unreachable, etc). */
   error: string | null
+  /**
+   * Whether `config`'s presentation half came off the host. False means the
+   * layout fields are placeholders: show nothing editable, and save nothing.
+   */
+  loaded: boolean
 }
 
 const api = {
   config: {
+    /** The local file only — no network, so this always returns promptly. */
     get: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:get'),
-    reload: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:reload'),
+    /** Fetch the profile from the host. Also the reconnect retry. */
+    connect: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:connect'),
     save: (cfg: RipponConfig): Promise<void> => ipcRenderer.invoke('config:save', cfg),
     saveLocal: (ssh: SshConfig, activeProfile: string): Promise<void> =>
       ipcRenderer.invoke('config:save-local', ssh, activeProfile),
     choosePath: (): Promise<void> => ipcRenderer.invoke('config:choose-path'),
-    onChanged: (cb: (cfg: RipponConfig, path: string, profiles: string[]) => void) =>
-      on<[RipponConfig, string, string[]]>('config:changed', cb)
+    onChanged: (
+      cb: (cfg: RipponConfig, path: string, profiles: string[], loaded: boolean) => void
+    ) => on<[RipponConfig, string, string[], boolean]>('config:changed', cb)
   },
   profile: {
     use: (name: string): Promise<Result<{ config: RipponConfig; profiles: string[] }>> =>

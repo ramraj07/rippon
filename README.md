@@ -62,7 +62,7 @@ so a browser login done in either applies to both.
 | **Double-click a tab** | `tmux rename-session` |
 | **× on a tab** | asks first — see below |
 | Opening a tab | `ssh -tt host tmux -u new-session -A -s <name>` |
-| Every 5s, and on window focus | `tmux list-sessions` |
+| Every 5s, on window focus, and on reconnect | `tmux list-sessions` |
 
 Closing a tab asks whether to kill the session:
 
@@ -124,10 +124,23 @@ Switch, create, rename or delete profiles from the **`<name> ▾`** chip in the 
 people (or the same person, different tasks) sharing one SSH login just pick different profiles.
 
 Because the presentation is remote, **startup waits on the connection** — there is no local copy to
-fall back on. If the host is unreachable you get an error bar with a retry; the layout appears once
-it connects. Profile reads/writes ride the same multiplexed connection as everything else (writes
-are atomic: temp file then rename), and the local file is watched by polling so a Drive/Dropbox sync
-that swaps the inode is still picked up live.
+fall back on. The local file is read first and needs no network, so the window opens straight away
+showing the host and profile it is about to load; until that profile actually arrives there is no
+workspace, so you get a connect screen instead of an empty one, and nothing that edits a profile is
+reachable. That is deliberate: a layout the app invented must never be offered for editing, because
+saving it would overwrite the real profile on the host.
+
+Retrying is automatic — 1s, 2s, 4s … capped at 30s, with the countdown and the ssh error on screen —
+and one attempt runs at a time, so a host that hangs cannot pile up a queue of them. Window focus,
+the network coming back, `⌘⇧L` and **Retry now** all jump the queue. Nothing needs a restart: the
+moment the host answers, the profile loads and the workspace appears.
+
+Once it is up, losing the connection is only a strip along the top: the panes and their scrollback
+stay, and saving keeps working, because from that point the profile in memory *is* the host's.
+
+Profile reads/writes ride the same multiplexed connection as everything else (writes are atomic:
+temp file then rename), and the local file is watched by polling so a Drive/Dropbox sync that swaps
+the inode is still picked up live.
 
 An older single-file config (v1–v4, everything local) is migrated automatically the first time it
 connects: the presentation is lifted up to a `default` profile on the host, and the local file
@@ -173,7 +186,7 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 | `⌘W` | close tab (asks about killing) |
 | `⌘1`–`⌘9` | jump to tab |
 | `⌃Tab` / `⌃⇧Tab` | cycle tabs |
-| `⌘⇧L` | refresh session list now |
+| `⌘⇧L` | refresh session list now (also retries a down host immediately) |
 | `⌘L` | focus the address bar |
 | `⌘J` | focus the terminal |
 | `⌘F` | find in the pane you were last in — page text, or terminal scrollback |

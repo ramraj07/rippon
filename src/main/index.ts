@@ -427,9 +427,10 @@ async function pickConfigFile(): Promise<void> {
   ptys.killAll()
   tunnels.stop()
   await configStore.setPath(result.filePaths[0])
-  const { config, profiles, error } = await buildConfigResponse()
-  send('config:changed', config, configStore.filePath, profiles)
-  if (error) send('app:error', error)
+  // A different file means a different host and profile: hand the renderer the
+  // local half and let its connect loop fetch the presentation half.
+  profileLoaded = false
+  send('config:changed', ...changedArgs(localPayload()))
 }
 
 /** Wrap a remote call so the renderer always gets {ok} or {error} instead of a rejection. */
@@ -441,22 +442,70 @@ async function attempt<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } 
   }
 }
 
+interface ConfigPayload {
+  config: RipponConfig
+  path: string
+  profiles: string[]
+  error: string | null
+  /** True only when `config`'s presentation half really came off the host. */
+  loaded: boolean
+}
+
 /**
- * Load the active profile from the host, running the one-time migration of a
- * pre-profiles file if one is pending. A profiles-model app cannot paint layout
- * without the connection, so a failure here yields defaults plus an error the UI
- * surfaces — the pending migration is kept so a later reload can complete it.
+ * Whether the profile currently in play was read from the host.
+ *
+ * Views, tiles and bookmarks live in a profile on the remote box, so before the
+ * first successful read there is no layout — only a placeholder. Writing that
+ * placeholder back would erase the real profile, so this gates every profile
+ * write, and the renderer keeps its layout UI locked until it sees it true. It
+ * stays true for the rest of the run once set: from then on the in-memory
+ * profile *is* the host's, so a connection that drops later is safe to save
+ * through. Only a change of host, profile or config file clears it.
  */
-async function resolveProfile(local: LocalConfig): Promise<{ profile: Profile; error: string | null }> {
-  const ssh = local.ssh
-  const pending = configStore.pendingLegacyProfile
-  if (!ssh.host) {
-    // Nothing remote to load yet; show the old layout if we have one to migrate.
-    return { profile: pending ?? defaultProfile(), error: null }
+let profileLoaded = false
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * The local half alone — instant, no network, nothing that can touch the host.
+ * The presentation fields are placeholders and `loaded: false` says so.
+ */
+function localPayload(): ConfigPayload {
+  const local = configStore.current
+  return {
+    config: mergeConfig(local, defaultProfile()),
+    path: configStore.filePath,
+    profiles: [local.activeProfile],
+    error: null,
+    loaded: false
   }
+}
+
+/** Arguments for the `config:changed` push, in the order the preload unpacks them. */
+function changedArgs(payload: ConfigPayload): [RipponConfig, string, string[], boolean] {
+  return [payload.config, payload.path, payload.profiles, payload.loaded]
+}
+
+/**
+ * Fetch the active profile from the host, running the one-time migration of a
+ * pre-profiles file if one is pending. Safe to call repeatedly — this is what
+ * the renderer's reconnect loop retries — and it reports failure rather than
+ * inventing a layout, so a host that is merely slow to come up loses nothing.
+ */
+async function connect(): Promise<ConfigPayload> {
+  const local: LocalConfig = configStore.current
+  const ssh = local.ssh
+  if (!ssh.host) return localPayload()
+
+  const pending = configStore.pendingLegacyProfile
+  let profile: Profile
   try {
-    let profile = await readProfile(ssh, local.activeProfile)
-    if (!profile) {
+    const remote = await readProfile(ssh, local.activeProfile)
+    if (remote) {
+      profile = remote
+    } else {
       // No file on the host: seed it — from the pending legacy layout if this is
       // a migration, otherwise an empty default so the profile exists to list.
       profile = pending ?? defaultProfile()
@@ -467,55 +516,58 @@ async function resolveProfile(local: LocalConfig): Promise<{ profile: Profile; e
       configStore.clearPendingLegacy()
       await configStore.save(local)
     }
-    return { profile, error: null }
   } catch (err) {
-    return { profile: defaultProfile(), error: err instanceof Error ? err.message : String(err) }
+    profileLoaded = false
+    return { ...localPayload(), error: message(err) }
   }
-}
 
-/** The full payload the renderer needs: merged config, path, profile list, error. */
-async function buildConfigResponse(): Promise<{
-  config: RipponConfig
-  path: string
-  profiles: string[]
-  error: string | null
-}> {
-  const local = configStore.current
-  const { profile, error } = await resolveProfile(local)
   let profiles: string[] = []
-  if (local.ssh.host && !error) {
-    try {
-      profiles = await listProfiles(local.ssh)
-    } catch {
-      // Listing is a nicety; a failure here should not block the layout.
-    }
+  try {
+    profiles = await listProfiles(ssh)
+  } catch {
+    // Listing is a nicety; a failure here should not block the layout.
   }
   if (!profiles.includes(local.activeProfile)) {
     profiles = [...profiles, local.activeProfile].sort((a, b) => a.localeCompare(b))
   }
-  return { config: mergeConfig(local, profile), path: configStore.filePath, profiles, error }
+
+  profileLoaded = true
+  return {
+    config: mergeConfig(local, profile),
+    path: configStore.filePath,
+    profiles,
+    error: null,
+    loaded: true
+  }
 }
 
 function registerIpc(): void {
+  // Boot: the local file only, so the window can paint the host it is about to
+  // reach instead of sitting blank behind a 20-second ssh timeout.
   ipcMain.handle('config:get', async () => {
     await configStore.load()
-    return buildConfigResponse()
+    profileLoaded = false
+    return localPayload()
   })
-  // Re-fetch the profile from the host (e.g. the retry after it was unreachable).
-  ipcMain.handle('config:reload', () => buildConfigResponse())
+  // Fetch the profile from the host — first attempt and every reconnect retry.
+  ipcMain.handle('config:connect', () => connect())
   ipcMain.handle('config:save', async (_e, cfg: RipponConfig) => {
     const { local, profile } = splitConfig(cfg)
     await configStore.save(local)
     if (!local.ssh.host) return
+    // Belt and braces behind the renderer's lock: a profile we never read is a
+    // placeholder, and writing it would wipe the real one on the host.
+    if (!profileLoaded) return
     try {
       await writeProfile(local.ssh, local.activeProfile, profile)
     } catch (err) {
-      send('app:error', `Could not save profile "${local.activeProfile}": ${err instanceof Error ? err.message : String(err)}`)
+      send('app:error', `Could not save profile "${local.activeProfile}": ${message(err)}`)
     }
   })
   // Persist only the connection half — used when the host changes, where pushing
   // the current layout onto the new host's profile would clobber it.
   ipcMain.handle('config:save-local', async (_e, ssh: SshConfig, activeProfile: string) => {
+    profileLoaded = false
     await configStore.save({ ...configStore.current, ssh, activeProfile })
   })
   ipcMain.handle('config:choose-path', async () => pickConfigFile())
@@ -523,13 +575,19 @@ function registerIpc(): void {
   // Switch the active profile: persist the choice locally, load it from the host.
   ipcMain.handle('profile:use', (_e, name: string) =>
     attempt(async () => {
-      const local = { ...configStore.current, activeProfile: name }
-      await configStore.save(local)
-      const { profile, error } = await resolveProfile(local)
-      if (error) throw new Error(error)
-      const profiles = await listProfiles(local.ssh)
-      if (!profiles.includes(name)) profiles.push(name)
-      return { config: mergeConfig(local, profile), profiles: profiles.sort((a, b) => a.localeCompare(b)) }
+      const previous = configStore.current
+      const wasLoaded = profileLoaded
+      await configStore.save({ ...previous, activeProfile: name })
+      profileLoaded = false
+      const payload = await connect()
+      if (!payload.loaded) {
+        // Stay on the profile we can actually read. The renderer still holds
+        // that one, so its provenance — and its right to be saved — is intact.
+        await configStore.save(previous)
+        profileLoaded = wasLoaded
+        throw new Error(payload.error ?? `Could not load profile "${name}" from the host.`)
+      }
+      return { config: payload.config, profiles: payload.profiles }
     })
   )
   ipcMain.handle('profile:list', () => attempt(() => listProfiles(configStore.current.ssh)))
@@ -628,12 +686,13 @@ function registerIpc(): void {
 
   tunnels.on('status', (status: TunnelStatus) => send('tunnel:status', status))
 
-  configStore.on('external-change', async (_local: LocalConfig) => {
-    const { config, profiles, error } = await buildConfigResponse()
-    send('config:changed', config, configStore.filePath, profiles)
-    if (error) send('app:error', error)
+  // The file changed under us — a sync, or a hand edit. It carries the host and
+  // the profile name, so the presentation half has to be fetched again.
+  configStore.on('external-change', (_local: LocalConfig) => {
+    profileLoaded = false
+    send('config:changed', ...changedArgs(localPayload()))
   })
-  configStore.on('error', (message: string) => send('app:error', message))
+  configStore.on('error', (text: string) => send('app:error', text))
 }
 
 app.whenReady().then(() => {

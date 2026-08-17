@@ -158,14 +158,28 @@ export class ConfigStore extends EventEmitter {
     }
     if (text === this.lastWritten) return
     this.lastWritten = text
+    let local: LocalConfig
+    let pendingLegacy: Profile | null
     try {
       const raw = JSON.parse(text)
-      this.local = normalizeLocalConfig(raw)
-      this.pendingLegacy = looksLikeLegacyConfig(raw) ? normalizeProfile(raw) : null
+      local = normalizeLocalConfig(raw)
+      pendingLegacy = looksLikeLegacyConfig(raw) ? normalizeProfile(raw) : null
     } catch {
       this.emit('error', `${this.currentPath} is not valid JSON; ignoring the change.`)
       return
     }
+    /*
+     * Only announce a change that means something. A sync service rewriting the
+     * file byte-for-byte differently — reordered keys, different indentation —
+     * still describes the same host and profile, and acting on it would drop the
+     * loaded profile and make the app reconnect for nothing.
+     */
+    const same =
+      JSON.stringify(local) === JSON.stringify(this.local) &&
+      JSON.stringify(pendingLegacy) === JSON.stringify(this.pendingLegacy)
+    this.local = local
+    this.pendingLegacy = pendingLegacy
+    if (same) return
     this.emit('external-change', this.local)
   }
 
