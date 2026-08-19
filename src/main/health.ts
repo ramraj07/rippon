@@ -35,6 +35,15 @@ const STRIKES = 2
 const TUNNEL_RETRY_MIN_MS = 10_000
 const TUNNEL_RETRY_MAX_MS = 60_000
 
+/**
+ * ssh's own words when the server will not open another channel on the shared
+ * connection. It prints one of these and then silently opens a connection of its
+ * own instead, so the command still works — which is exactly why this needs
+ * catching. Nothing fails; everything just gets five times slower.
+ */
+const SATURATED_RE =
+  /session request failed|open failed: administratively prohibited|channel \d+: open failed/i
+
 export class HealthMonitor {
   private timer: NodeJS.Timeout | null = null
   private busy = false
@@ -47,6 +56,8 @@ export class HealthMonitor {
   private repaired = false
   private tunnelFailures = 0
   private nextTunnelTry = 0
+  /** Whether the shared connection is currently refusing new channels. */
+  private saturated = false
 
   constructor(
     private readonly ssh: () => SshConfig,
@@ -80,7 +91,7 @@ export class HealthMonitor {
     this.busy = true
     try {
       await this.checkConnection(ssh)
-      this.checkForwarder()
+      await this.checkForwarder()
     } finally {
       this.busy = false
     }
@@ -88,12 +99,13 @@ export class HealthMonitor {
 
   private async checkConnection(ssh: SshConfig): Promise<void> {
     try {
-      const ms = await probe(ssh, PROBE_TIMEOUT_MS)
+      const { ms, stderr } = await probe(ssh, PROBE_TIMEOUT_MS)
       if (this.strikes || this.repaired) {
         activity.add('ssh', 'ok', `connection responding again (${ms}ms)`)
       }
       this.strikes = 0
       this.repaired = false
+      this.checkSaturation(stderr, ms)
     } catch (err) {
       /*
        * Only a silent kill counts. Everything else — refused, unreachable, auth,
@@ -123,8 +135,37 @@ export class HealthMonitor {
     }
   }
 
-  private checkForwarder(): void {
-    if (!this.tunnels.wants() || this.tunnels.status().running) {
+  /**
+   * Notice when the connection has stopped being shared.
+   *
+   * Reported on the transition only, in both directions: this runs every ten
+   * seconds, and a line repeating forever is a line people stop reading. The
+   * advice belongs here rather than in a doc comment because the log is where
+   * someone will be looking when it happens.
+   */
+  private checkSaturation(stderr: string, ms: number): void {
+    const refusing = SATURATED_RE.test(stderr)
+    if (refusing === this.saturated) return
+    this.saturated = refusing
+    if (refusing) {
+      activity.add(
+        'ssh',
+        'warn',
+        `the host is refusing extra channels on the shared connection — every call now opens its own (${ms}ms, normally ~200ms)`,
+        {
+          detail: `${stderr.trim()}\n\nEach attached pane holds one channel, and sshd allows 10 by default.\nRaise MaxSessions in /etc/ssh/sshd_config on the host, or turn on\n"Detach background sessions" in Settings to free a channel per hidden pane.`
+        }
+      )
+      return
+    }
+    activity.add('ssh', 'ok', `sharing one connection again (${ms}ms)`)
+  }
+
+  private async checkForwarder(): Promise<void> {
+    // Liveness is the local listeners, not our child process: `ssh -N` hands the
+    // forwards to the shared connection and exits, so a dead child is the normal
+    // case rather than a fault.
+    if (!this.tunnels.wants() || (await this.tunnels.listening())) {
       this.tunnelFailures = 0
       return
     }

@@ -169,6 +169,17 @@ moment the host answers, the profile loads and the workspace appears.
 Once it is up, losing the connection is only a strip along the top: the panes and their scrollback
 stay, and saving keeps working, because from that point the profile in memory *is* the host's.
 
+### One connection, ten channels
+
+Everything rides a single multiplexed ssh connection, and **sshd allows 10 sessions on one
+connection by default** (`MaxSessions`). Each attached pane holds one, so past ten panes the host
+starts refusing them — and ssh does not fail, it quietly opens a separate connection for every call
+instead. Nothing breaks; everything just gets about five times slower, from ~200ms a call to ~1s.
+
+**SSH activity** calls this out when it happens, with the two ways out: raise `MaxSessions` in
+`/etc/ssh/sshd_config` on the host, or turn on **Detach background sessions**, which frees a channel
+for every pane that is off screen.
+
 A connection that *hangs* rather than drops is the harder case — a VPN re-route or a sleep leaves the
 shared ssh connection alive at the kernel level but carrying nothing, and everything that rides it
 blocks forever. So while the window is focused and the screen unlocked, a health check probes the

@@ -171,12 +171,24 @@ export function wedged(err: unknown): boolean {
  * merely unreachable must fail quickly and visibly, rather than being killed by
  * the caller's timeout and mistaken for a hang.
  */
-export async function probe(ssh: SshConfig, timeoutMs: number): Promise<number> {
+export async function probe(
+  ssh: SshConfig,
+  timeoutMs: number
+): Promise<{ ms: number; stderr: string }> {
   const started = Date.now()
-  await exec('ssh', ['-o', 'ConnectTimeout=4', ...controlArgs(), ...ssh.args, ssh.host, 'true'], {
-    timeout: timeoutMs
-  })
-  return Date.now() - started
+  const { stderr } = await exec(
+    'ssh',
+    ['-o', 'ConnectTimeout=4', ...controlArgs(), ...ssh.args, ssh.host, 'true'],
+    { timeout: timeoutMs }
+  )
+  /*
+   * stderr matters even when the call succeeds, which is unusual enough to spell
+   * out. When the server will not open another channel on the shared connection,
+   * ssh says so here and then quietly falls back to a connection of its own — so
+   * the command works, and the only evidence that multiplexing has stopped
+   * happening is this text and the round trip going from ~200ms to ~1s.
+   */
+  return { ms: Date.now() - started, stderr }
 }
 
 /** Ask the multiplexing master to exit. Best-effort: a failure here is fine. */

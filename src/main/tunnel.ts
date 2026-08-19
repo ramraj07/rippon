@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import net from 'node:net'
 import { activity } from './activity'
 import { controlArgs } from './tmux'
 import { tunnelLabel, type SshConfig, type Tunnel, type TunnelStatus } from '../shared/types'
@@ -33,6 +34,27 @@ export class TunnelManager extends EventEmitter {
   /** Whether a forwarder ought to be up: a host, and something to forward. */
   wants(): boolean {
     return !!this.last?.host && (this.last.tunnels ?? []).length > 0
+  }
+
+  /**
+   * Whether the forwards are actually carrying traffic, judged by the local
+   * listeners rather than by whether our child process is alive.
+   *
+   * The distinction is the whole point. `ssh -N` against an existing master
+   * installs the forwards *on the master* and then has nothing left to hold, so
+   * it exits 0 immediately and the forwards outlive it — a dead child says
+   * nothing about whether the ports work. Judging by the process instead had the
+   * health monitor declaring healthy forwards dead and restarting them in a loop,
+   * where each restart raced its own master for ports it already held.
+   */
+  async listening(): Promise<boolean> {
+    const ports = (this.last?.tunnels ?? []).map((t) => t.localPort)
+    if (!ports.length) return false
+    const held = await Promise.all(ports.map(portTaken))
+    // Any listener is enough to mean "not down". A forward that lost a single
+    // port has already said so on stderr, and restarting the lot to chase it
+    // would take down the ones that work.
+    return held.some(Boolean)
   }
 
   /**
@@ -110,7 +132,18 @@ export class TunnelManager extends EventEmitter {
       this.proc = null
       const error =
         this.current.error ?? (code ? describe(this.stderr) || `ssh exited (code ${code})` : null)
-      activity.add('tunnel', code ? 'error' : 'info', `forwarder exited (code ${code ?? 0})`, {
+      if (!code && !error) {
+        /*
+         * Exiting 0 with nothing to say is success, not death: the forwards were
+         * handed to the shared connection, which holds them from here on. Saying
+         * "exited" for this read as a failure in the log, and reporting it as
+         * not running made the chip go dark over forwards that were working.
+         */
+        activity.add('tunnel', 'info', 'forwards handed to the shared connection')
+        this.update({ running: true, forwards, error: null })
+        return
+      }
+      activity.add('tunnel', 'error', `forwarder exited (code ${code ?? 0})`, {
         detail: error ?? undefined
       })
       this.update({ running: false, forwards, error })
@@ -141,6 +174,23 @@ export class TunnelManager extends EventEmitter {
     this.current = status
     this.emit('status', status)
   }
+}
+
+/**
+ * Whether something already holds a local port.
+ *
+ * Asked by trying to bind it: EADDRINUSE means taken, which is the answer we
+ * want. Connecting to it would be worse than useless — it would open a channel
+ * through to the remote host and count against the server's session limit, which
+ * is the very resource this app runs short of.
+ */
+function portTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer()
+    probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'EADDRINUSE'))
+    probe.once('listening', () => probe.close(() => resolve(false)))
+    probe.listen(port, '127.0.0.1')
+  })
 }
 
 function forwardSpec(t: Tunnel): string {
