@@ -11,7 +11,7 @@ import {
 import TerminalPane, { type TerminalHandle } from './TerminalPane'
 import BrowserPane, { type BrowserHandle } from './BrowserPane'
 import FileBrowser from './FileBrowser'
-import SshSettings from './SshSettings'
+import HostSettings from './HostSettings'
 import {
   CloseSessionDialog,
   ColumnsDialog,
@@ -23,9 +23,13 @@ import {
   type MenuItem
 } from './Dialogs'
 import {
+  activeHost,
   defaultSession,
   defaultView,
   clampZoom,
+  hostConfigured,
+  hostLabel,
+  hostTarget,
   MAX_COLUMNS,
   MAX_TILES,
   normalizeConfig,
@@ -34,12 +38,14 @@ import {
   SIDEBAR_MIN,
   suggestColumns,
   VIEW_TYPE_LABELS,
+  withActiveHost,
   type Bookmark,
   type BookmarkScope,
   type RipponConfig,
   type SessionConfig,
   type SessionInfo,
-  type SshConfig,
+  type HostConfig,
+  type HostEntry,
   type TunnelStatus,
   type View,
   type ViewType
@@ -145,6 +151,8 @@ export default function App(): JSX.Element {
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
 
+  /** The host the whole window is pointed at. Never undefined — see activeHost. */
+  const host = activeHost(config)
   const view = config.views.find((v) => v.id === config.activeViewId) ?? config.views[0]
   const tiled = view.type === 'tiled'
 
@@ -252,7 +260,7 @@ export default function App(): JSX.Element {
    */
   const sync = useCallback(async () => {
     if (syncing.current) return
-    if (!configRef.current.ssh.host) {
+    if (!hostConfigured(activeHost(configRef.current))) {
       setSessions([])
       setConn(IDLE_CONN)
       return
@@ -271,7 +279,7 @@ export default function App(): JSX.Element {
         loadedRef.current = true
         setLoaded(true)
       }
-      const list = await window.rippon.tmux.list(configRef.current.ssh)
+      const list = await window.rippon.tmux.list(activeHost(configRef.current))
       if (!list.ok) throw new Error(list.error)
       adoptSessions(list.value)
       attempts.current = 0
@@ -309,8 +317,8 @@ export default function App(): JSX.Element {
    * leave the tab strip a step behind.
    */
   const refresh = useCallback(async () => {
-    if (!configRef.current.ssh.host || !loadedRef.current) return
-    const list = await window.rippon.tmux.list(configRef.current.ssh)
+    if (!hostConfigured(activeHost(configRef.current)) || !loadedRef.current) return
+    const list = await window.rippon.tmux.list(activeHost(configRef.current))
     if (!list.ok) return
     adoptSessions(list.value)
   }, [adoptSessions])
@@ -395,7 +403,7 @@ export default function App(): JSX.Element {
   const createSession = useCallback(
     async (name: string) => {
       setDialog(null)
-      const res = await window.rippon.tmux.create(configRef.current.ssh, name)
+      const res = await window.rippon.tmux.create(activeHost(configRef.current), name)
       if (!res.ok) {
         failed(`Could not create session “${name}”`, res.error)
         return
@@ -441,7 +449,7 @@ export default function App(): JSX.Element {
     async (name: string) => {
       setDialog(null)
       const next = neighbourOf(name)
-      const res = await window.rippon.tmux.kill(configRef.current.ssh, name)
+      const res = await window.rippon.tmux.kill(activeHost(configRef.current), name)
       if (!res.ok) {
         failed(`Could not kill session “${name}”`, res.error)
         return
@@ -467,7 +475,7 @@ export default function App(): JSX.Element {
     async (from: string, to: string) => {
       setDialog(null)
       if (from === to) return
-      const res = await window.rippon.tmux.rename(configRef.current.ssh, from, to)
+      const res = await window.rippon.tmux.rename(activeHost(configRef.current), from, to)
       if (!res.ok) {
         failed(`Could not rename “${from}” to “${to}”`, res.error)
         return
@@ -615,40 +623,99 @@ export default function App(): JSX.Element {
     [commit]
   )
 
-  // ---------- profiles ----------
+  // ---------- hosts and profiles ----------
+
+  /** What identifies a connection, for deciding whether it has to be remade. */
+  function connectionKey(h: HostEntry): string {
+    return JSON.stringify([h.kind, h.host, h.args])
+  }
 
   const saveSettings = useCallback(
-    async (ssh: SshConfig, detachHidden: boolean) => {
+    async (hosts: HostEntry[], activeHostId: string, detachHidden: boolean) => {
       setDialog(null)
       const cur = configRef.current
-      const hostChanged =
-        ssh.host !== cur.ssh.host || ssh.args.join(' ') !== cur.ssh.args.join(' ')
-      if (hostChanged || !loadedRef.current) {
+      const before = activeHost(cur)
+      const after = activeHost({ hosts, activeHostId })
+      const moved = before.id !== after.id || connectionKey(before) !== connectionKey(after)
+
+      if (moved || !loadedRef.current) {
         /*
-         * Only the connection half is ours to write here. A new host has its own
-         * profile to fetch rather than have this one pushed onto it, and while we
-         * are still locked there is no profile to write at all — detachHidden
-         * lives in one, so it comes from the host, not from this dialog.
+         * Only the connection half is ours to write here. A different host has
+         * its own profile to fetch rather than have this one pushed onto it, and
+         * while we are still locked there is no profile to write at all —
+         * detachHidden lives in one, so it comes from the host, not this dialog.
          */
-        applyConfig({ ...cur, ssh })
-        await window.rippon.config.saveLocal(ssh, cur.activeProfile)
+        applyConfig({ ...cur, hosts, activeHostId })
+        await window.rippon.config.saveHosts(hosts, activeHostId)
         loadedRef.current = false
         setLoaded(false)
         setSessions([])
         retryNow()
       } else {
-        // Same host, profile in hand: ordinary autosave, detachHidden included.
-        commit({ ...cur, ssh, detachHidden })
+        // Same connection, profile in hand: ordinary autosave, detachHidden included.
+        commit({ ...cur, hosts, activeHostId, detachHidden })
         void refresh()
       }
     },
     [applyConfig, commit, refresh, retryNow]
   )
 
+  /**
+   * Switch hosts from the chip. The layout belongs to the host we are moving to,
+   * so this drops the current one and lets the main process hand back the new
+   * host's profile — the same dance as switching profiles, one level up.
+   */
+  const useHost = useCallback(
+    async (id: string) => {
+      setCtx(null)
+      if (id === activeHost(configRef.current).id) return
+      setSessions([])
+      loadedRef.current = false
+      setLoaded(false)
+      const res = await window.rippon.host.use(id)
+      if (!res.ok) {
+        // The main process rolled the choice back, but this window has already
+        // dropped its panes — so pick the old host's profile up again.
+        failed('Could not switch host', res.error)
+        retryNow()
+        return
+      }
+      applyConfig(res.value.config)
+      setProfiles(res.value.profiles)
+      loadedRef.current = true
+      setLoaded(true)
+      await refresh()
+    },
+    [applyConfig, failed, refresh, retryNow]
+  )
+
+  const hostMenu = useCallback(
+    (x: number, y: number) => {
+      const cur = configRef.current
+      setCtx({
+        x,
+        y,
+        items: [
+          ...cur.hosts.map((h) => ({
+            label: hostLabel(h),
+            checked: h.id === cur.activeHostId,
+            onClick: () => void useHost(h.id)
+          })),
+          {
+            label: 'Hosts and settings…',
+            separator: true,
+            onClick: () => setDialog({ kind: 'settings' })
+          }
+        ]
+      })
+    },
+    [useHost]
+  )
+
   const useProfile = useCallback(
     async (name: string) => {
       setCtx(null)
-      if (name === configRef.current.activeProfile) return
+      if (name === activeHost(configRef.current).activeProfile) return
       const res = await window.rippon.profile.use(name)
       if (!res.ok) {
         failed(`Could not switch to profile “${name}”`, res.error)
@@ -678,7 +745,7 @@ export default function App(): JSX.Element {
   const renameProfile = useCallback(
     async (to: string) => {
       setDialog(null)
-      const from = configRef.current.activeProfile
+      const from = activeHost(configRef.current).activeProfile
       if (from === to) return
       const res = await window.rippon.profile.rename(from, to)
       if (!res.ok) {
@@ -686,7 +753,9 @@ export default function App(): JSX.Element {
         return
       }
       setProfiles(res.value.profiles)
-      applyConfig({ ...configRef.current, activeProfile: res.value.activeProfile })
+      applyConfig(
+        withActiveHost(configRef.current, { activeProfile: res.value.activeProfile })
+      )
     },
     [applyConfig, failed]
   )
@@ -703,7 +772,7 @@ export default function App(): JSX.Element {
 
   const profileMenu = useCallback(
     (x: number, y: number) => {
-      const cur = configRef.current
+      const cur = activeHost(configRef.current)
       const others = profiles.filter((p) => p !== cur.activeProfile)
       setCtx({
         x,
@@ -822,7 +891,7 @@ export default function App(): JSX.Element {
       setLoaded(res.loaded)
       loadedRef.current = res.loaded
       setBooted(true)
-      if (!res.config.ssh.host) {
+      if (!hostConfigured(activeHost(res.config))) {
         setConn(IDLE_CONN)
         setDialog({ kind: 'settings' })
         return
@@ -875,11 +944,15 @@ export default function App(): JSX.Element {
     return window.rippon.tunnel.onStatus(setTunnelStatus)
   }, [])
 
-  // Reconcile the forwards whenever the host, flags or tunnel list changes —
-  // covers first load, a saved change, and a config edited on another machine.
-  const sshKey = JSON.stringify(config.ssh)
+  /*
+   * Reconcile the forwards whenever the host, flags or tunnel list changes —
+   * covers first load, a saved change, and a config edited on another machine.
+   * Deliberately not the whole host entry: a profile switch changes that and
+   * would tear working forwards down for nothing.
+   */
+  const sshKey = JSON.stringify([host.kind, host.host, host.args, host.tunnels])
   useEffect(() => {
-    void window.rippon.tunnel.sync(configRef.current.ssh)
+    void window.rippon.tunnel.sync(activeHost(configRef.current))
   }, [sshKey])
 
   useEffect(() => {
@@ -1009,16 +1082,16 @@ export default function App(): JSX.Element {
           <span className="titlebar-note">
             {conn.state === 'idle'
               ? 'no host configured'
-              : `profile “${config.activeProfile}” on ${config.ssh.host}`}
+              : `profile “${host.activeProfile}” on ${hostTarget(host)}`}
           </span>
           <span className="spacer" />
-          <button
-            className="host-btn"
-            title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
-            onClick={() => setDialog({ kind: 'settings' })}
-          >
-            {config.ssh.host || 'set up SSH…'} ⚙
-          </button>
+          <HostChip
+            host={host}
+            many={config.hosts.length > 1}
+            configPath={configPath}
+            onMenu={hostMenu}
+            onSettings={() => setDialog({ kind: 'settings' })}
+          />
         </header>
 
         {notice ? (
@@ -1030,8 +1103,8 @@ export default function App(): JSX.Element {
 
         <ConnectScreen
           booted={booted}
-          host={config.ssh.host}
-          profile={config.activeProfile}
+          host={host}
+          profile={host.activeProfile}
           configPath={configPath}
           conn={conn}
           onRetry={retryNow}
@@ -1039,8 +1112,9 @@ export default function App(): JSX.Element {
         />
 
         {dialog?.kind === 'settings' ? (
-          <SshSettings
-            ssh={config.ssh}
+          <HostSettings
+            hosts={config.hosts}
+            activeHostId={config.activeHostId}
             detachHidden={config.detachHidden}
             configPath={configPath}
             tunnelStatus={tunnelStatus}
@@ -1060,13 +1134,13 @@ export default function App(): JSX.Element {
         <span className="wordmark">Rippon</span>
         <button
           className="profile-chip"
-          title={`Profile: ${config.activeProfile}\nStored on ${config.ssh.host || 'the host'} — click to switch or manage`}
+          title={`Profile: ${host.activeProfile}\nStored on ${hostTarget(host)} — click to switch or manage`}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             profileMenu(r.left, r.bottom + 4)
           }}
         >
-          {config.activeProfile} ▾
+          {host.activeProfile} ▾
         </button>
         <div className="viewbar">
           {config.views.map((v) => (
@@ -1101,7 +1175,7 @@ export default function App(): JSX.Element {
             ⇱ {mouseMode ? 'on' : 'off'}
           </button>
         ) : null}
-        {config.ssh.tunnels.length ? (
+        {host.tunnels.length ? (
           <button
             className={`tunnel-chip tunnel-chip-${
               tunnelStatus?.error ? 'error' : tunnelStatus?.running ? 'ok' : 'idle'
@@ -1115,16 +1189,16 @@ export default function App(): JSX.Element {
             }\nClick to restart the forwards — the host chip manages them`}
             onClick={() => void window.rippon.tunnel.restart()}
           >
-            ⇄ {config.ssh.tunnels.length}
+            ⇄ {host.tunnels.length}
           </button>
         ) : null}
-        <button
-          className="host-btn"
-          title={`${config.ssh.host || 'No host set'}\nConfig: ${configPath}`}
-          onClick={() => setDialog({ kind: 'settings' })}
-        >
-          {config.ssh.host || 'set up SSH…'} ⚙
-        </button>
+        <HostChip
+          host={host}
+          many={config.hosts.length > 1}
+          configPath={configPath}
+          onMenu={hostMenu}
+          onSettings={() => setDialog({ kind: 'settings' })}
+        />
       </header>
 
       {notice ? (
@@ -1141,11 +1215,11 @@ export default function App(): JSX.Element {
       */}
       {loaded && conn.state !== 'online' && conn.state !== 'idle' ? (
         <ConnectionBar
-          host={config.ssh.host}
+          host={host.host}
           conn={conn}
           onRetry={retryNow}
           onDetails={() =>
-            conn.error ? failed(`Cannot reach ${config.ssh.host}`, conn.error) : undefined
+            conn.error ? failed(`Cannot reach ${host.host}`, conn.error) : undefined
           }
         />
       ) : null}
@@ -1298,11 +1372,11 @@ export default function App(): JSX.Element {
             <div className="empty">
               {conn.state === 'online' ? (
                 <>
-                  No tmux sessions on {config.ssh.host}.
+                  No tmux sessions on {host.host}.
                   <button onClick={() => setDialog({ kind: 'new-session' })}>Create one</button>
                 </>
               ) : (
-                <>Waiting for {config.ssh.host}…</>
+                <>Waiting for {host.host}…</>
               )}
             </div>
           ) : null}
@@ -1319,7 +1393,7 @@ export default function App(): JSX.Element {
               <SessionPane
                 key={s.name}
                 session={s}
-                ssh={config.ssh}
+                ssh={host}
                 visible={visible}
                 suppressed={overlayOpen}
                 zoom={view.zoom}
@@ -1385,14 +1459,15 @@ export default function App(): JSX.Element {
       </div>
 
       {dialog?.kind === 'files' ? (
-        <FileBrowser host={config.ssh.host} onClose={() => setDialog(null)} />
+        <FileBrowser host={hostTarget(host)} onClose={() => setDialog(null)} />
       ) : null}
 
       {ctx ? <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} /> : null}
 
       {dialog?.kind === 'settings' ? (
-        <SshSettings
-          ssh={config.ssh}
+        <HostSettings
+          hosts={config.hosts}
+          activeHostId={config.activeHostId}
           detachHidden={config.detachHidden}
           configPath={configPath}
           tunnelStatus={tunnelStatus}
@@ -1475,7 +1550,7 @@ export default function App(): JSX.Element {
           title="Rename profile"
           confirmLabel="Rename"
           label="Profile name"
-          initial={config.activeProfile}
+          initial={host.activeProfile}
           validate={profileNameError}
           takenMessage="A profile with that name already exists."
           taken={profiles}
@@ -1571,12 +1646,58 @@ function ConnectionBar({ host, conn, onRetry, onDetails }: ConnectionBarProps): 
 
 interface ConnectScreenProps {
   booted: boolean
-  host: string
+  host: HostEntry
   profile: string
   configPath: string
   conn: Conn
   onRetry(): void
   onSettings(): void
+}
+
+/**
+ * The host name in the corner, and the two things anyone wants from it: switch,
+ * or edit. Split across the button so a single click cannot do the wrong one —
+ * the name opens the switcher, the gear opens settings. With only one host
+ * configured there is nothing to switch to, so the whole chip goes to settings.
+ */
+function HostChip({
+  host,
+  many,
+  configPath,
+  onMenu,
+  onSettings
+}: {
+  host: HostEntry
+  many: boolean
+  configPath: string
+  onMenu(x: number, y: number): void
+  onSettings(): void
+}): JSX.Element {
+  const label = hostConfigured(host) ? hostLabel(host) : 'add a host…'
+  const title = `${hostConfigured(host) ? hostTarget(host) : 'No host set'}\nProfile: ${
+    host.activeProfile
+  }\nConfig: ${configPath}${many ? '\n\nClick the name to switch hosts.' : ''}`
+
+  return (
+    <span className="host-btn-group">
+      <button
+        className="host-btn"
+        title={title}
+        onClick={(e) => {
+          if (!many) return onSettings()
+          const r = e.currentTarget.getBoundingClientRect()
+          onMenu(Math.max(8, r.right - 220), r.bottom + 4)
+        }}
+      >
+        {host.kind === 'local' ? '⌂ ' : ''}
+        {label}
+        {many ? ' ▾' : ''}
+      </button>
+      <button className="host-gear" title="Hosts and settings" onClick={onSettings}>
+        ⚙
+      </button>
+    </span>
+  )
 }
 
 /**
@@ -1609,18 +1730,19 @@ function ConnectScreen({
     )
   }
 
-  if (conn.state === 'idle' || !host) {
+  if (conn.state === 'idle' || !hostConfigured(host)) {
     return (
       <div className="connect-screen">
         <div className="connect-card">
           <h2 className="connect-title">No host yet</h2>
           <p className="connect-line">
-            Rippon works one SSH host at a time. Its tabs are the tmux sessions running there, and
-            your views and bookmarks are stored on the box itself.
+            Rippon points at one host at a time — another machine over SSH, or this one. Its tabs
+            are the tmux sessions running there, and your views and bookmarks are stored alongside
+            them rather than in this app.
           </p>
           <div className="connect-actions">
             <button className="primary" onClick={onSettings}>
-              Set up SSH
+              Add a host
             </button>
           </div>
           <p className="connect-path">{configPath.replace(/^\/Users\/[^/]+/, '~')}</p>
@@ -1639,7 +1761,7 @@ function ConnectScreen({
       <div className="connect-card">
         {trying ? <span className="connect-spinner" /> : null}
         <h2 className={`connect-title ${conn.error ? 'connect-title-error' : ''}`}>
-          {conn.error ? `Can’t reach ${host}` : `Connecting to ${host}`}
+          {conn.error ? `Can’t reach ${hostLabel(host)}` : `Connecting to ${hostLabel(host)}`}
         </h2>
         <p className="connect-line">
           {conn.error
@@ -1667,7 +1789,7 @@ function ConnectScreen({
 
 interface SessionPaneProps {
   session: SessionInfo
-  ssh: SshConfig
+  ssh: HostConfig
   visible: boolean
   /** Something is overlaying the app, so main-process browser views must hide. */
   suppressed: boolean

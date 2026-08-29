@@ -36,15 +36,18 @@ import {
 } from './tmux'
 import { TunnelManager } from './tunnel'
 import {
+  activeHost,
   defaultProfile,
+  hostConfigured,
   mergeConfig,
   splitConfig,
+  type HostEntry,
   type LocalConfig,
   type Profile,
   type RipponConfig,
   type ActivityEntry,
   type SessionInfo,
-  type SshConfig,
+  type HostConfig,
   type TunnelStatus
 } from '../shared/types'
 import type { BrowserState, FindMatches } from '../shared/types'
@@ -73,7 +76,7 @@ let screenLocked = false
  * connection, and repairing one there would drop panes nobody is watching.
  */
 const health = new HealthMonitor(
-  () => configStore.current.ssh,
+  () => activeHost(configStore.current),
   tunnels,
   () =>
     !shuttingDown &&
@@ -507,6 +510,21 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** The host everything below acts on. Always present — see `activeHost`. */
+function host(): HostEntry {
+  return activeHost(configStore.current)
+}
+
+/** Persist a change to the active host entry, leaving the others alone. */
+async function saveHost(patch: Partial<HostEntry>): Promise<void> {
+  const local = configStore.current
+  const id = host().id
+  await configStore.save({
+    ...local,
+    hosts: local.hosts.map((h) => (h.id === id ? { ...h, ...patch } : h))
+  })
+}
+
 /**
  * The local half alone — instant, no network, nothing that can touch the host.
  * The presentation fields are placeholders and `loaded: false` says so.
@@ -516,7 +534,7 @@ function localPayload(): ConfigPayload {
   return {
     config: mergeConfig(local, defaultProfile()),
     path: configStore.filePath,
-    profiles: [local.activeProfile],
+    profiles: [activeHost(local).activeProfile],
     error: null,
     loaded: false
   }
@@ -535,20 +553,20 @@ function changedArgs(payload: ConfigPayload): [RipponConfig, string, string[], b
  */
 async function connect(): Promise<ConfigPayload> {
   const local: LocalConfig = configStore.current
-  const ssh = local.ssh
-  if (!ssh.host) return localPayload()
+  const ssh = activeHost(local)
+  if (!hostConfigured(ssh)) return localPayload()
 
   const pending = configStore.pendingLegacyProfile
   let profile: Profile
   try {
-    const remote = await readProfile(ssh, local.activeProfile)
+    const remote = await readProfile(ssh, ssh.activeProfile)
     if (remote) {
       profile = remote
     } else {
       // No file on the host: seed it — from the pending legacy layout if this is
       // a migration, otherwise an empty default so the profile exists to list.
       profile = pending ?? defaultProfile()
-      await writeProfile(ssh, local.activeProfile, profile)
+      await writeProfile(ssh, ssh.activeProfile, profile)
     }
     if (pending) {
       // Migration landed: shrink the local file so it never re-migrates.
@@ -566,8 +584,8 @@ async function connect(): Promise<ConfigPayload> {
   } catch {
     // Listing is a nicety; a failure here should not block the layout.
   }
-  if (!profiles.includes(local.activeProfile)) {
-    profiles = [...profiles, local.activeProfile].sort((a, b) => a.localeCompare(b))
+  if (!profiles.includes(ssh.activeProfile)) {
+    profiles = [...profiles, ssh.activeProfile].sort((a, b) => a.localeCompare(b))
   }
 
   profileLoaded = true
@@ -593,30 +611,61 @@ function registerIpc(): void {
   ipcMain.handle('config:save', async (_e, cfg: RipponConfig) => {
     const { local, profile } = splitConfig(cfg)
     await configStore.save(local)
-    if (!local.ssh.host) return
+    const target = activeHost(local)
+    if (!hostConfigured(target)) return
     // Belt and braces behind the renderer's lock: a profile we never read is a
     // placeholder, and writing it would wipe the real one on the host.
     if (!profileLoaded) return
     try {
-      await writeProfile(local.ssh, local.activeProfile, profile)
+      await writeProfile(target, target.activeProfile, profile)
     } catch (err) {
-      send('app:error', `Could not save profile "${local.activeProfile}": ${message(err)}`)
+      send('app:error', `Could not save profile "${target.activeProfile}": ${message(err)}`)
     }
   })
-  // Persist only the connection half — used when the host changes, where pushing
-  // the current layout onto the new host's profile would clobber it.
-  ipcMain.handle('config:save-local', async (_e, ssh: SshConfig, activeProfile: string) => {
+  /*
+   * Persist only the connection half — used when the host list changes, where
+   * pushing the current layout onto whatever profile the new host holds would
+   * clobber it. The profile lock drops, so the renderer refetches.
+   */
+  ipcMain.handle('config:save-hosts', async (_e, hosts: HostEntry[], activeHostId: string) => {
     profileLoaded = false
-    await configStore.save({ ...configStore.current, ssh, activeProfile })
+    ptys.killAll()
+    tunnels.stop()
+    await configStore.save({ ...configStore.current, hosts, activeHostId })
   })
   ipcMain.handle('config:choose-path', async () => pickConfigFile())
+
+  /**
+   * Switch hosts. Same shape as `profile:use`, and for the same reason: the
+   * layout belongs to the host, so until the new one hands its profile over
+   * there is nothing to draw, and a failure has to put the old one back.
+   */
+  ipcMain.handle('host:use', (_e, id: string) =>
+    attempt(async () => {
+      const previous = configStore.current
+      if (!previous.hosts.some((h) => h.id === id)) throw new Error('No such host.')
+      const wasLoaded = profileLoaded
+      // The panes and forwards belong to the host we are leaving.
+      ptys.killAll()
+      tunnels.stop()
+      await configStore.save({ ...previous, activeHostId: id })
+      profileLoaded = false
+      const payload = await connect()
+      if (!payload.loaded) {
+        await configStore.save(previous)
+        profileLoaded = wasLoaded
+        throw new Error(payload.error ?? 'Could not load a profile from that host.')
+      }
+      return { config: payload.config, profiles: payload.profiles }
+    })
+  )
 
   // Switch the active profile: persist the choice locally, load it from the host.
   ipcMain.handle('profile:use', (_e, name: string) =>
     attempt(async () => {
       const previous = configStore.current
       const wasLoaded = profileLoaded
-      await configStore.save({ ...previous, activeProfile: name })
+      await saveHost({ activeProfile: name })
       profileLoaded = false
       const payload = await connect()
       if (!payload.loaded) {
@@ -629,53 +678,52 @@ function registerIpc(): void {
       return { config: payload.config, profiles: payload.profiles }
     })
   )
-  ipcMain.handle('profile:list', () => attempt(() => listProfiles(configStore.current.ssh)))
+  ipcMain.handle('profile:list', () => attempt(() => listProfiles(host())))
   ipcMain.handle('profile:create', (_e, name: string) =>
     attempt(async () => {
-      await createProfile(configStore.current.ssh, name)
-      return listProfiles(configStore.current.ssh)
+      await createProfile(host(), name)
+      return listProfiles(host())
     })
   )
   ipcMain.handle('profile:rename', (_e, from: string, to: string) =>
     attempt(async () => {
-      const ssh = configStore.current.ssh
+      const ssh = host()
       await renameProfile(ssh, from, to)
-      let activeProfile = configStore.current.activeProfile
+      let activeProfile = host().activeProfile
       if (activeProfile === from) {
         activeProfile = to
-        await configStore.save({ ...configStore.current, activeProfile })
+        await saveHost({ activeProfile })
       }
       return { profiles: await listProfiles(ssh), activeProfile }
     })
   )
   ipcMain.handle('profile:delete', (_e, name: string) =>
     attempt(async () => {
-      if (name === configStore.current.activeProfile) {
+      if (name === host().activeProfile) {
         throw new Error('Cannot delete the active profile. Switch to another first.')
       }
-      await deleteProfile(configStore.current.ssh, name)
-      return listProfiles(configStore.current.ssh)
+      await deleteProfile(host(), name)
+      return listProfiles(host())
     })
   )
 
-  ipcMain.handle('tmux:list', (_e, ssh: SshConfig) =>
+  ipcMain.handle('tmux:list', (_e, ssh: HostConfig) =>
     attempt<SessionInfo[]>(() => listSessions(ssh))
   )
-  ipcMain.handle('tmux:create', (_e, ssh: SshConfig, name: string) =>
+  ipcMain.handle('tmux:create', (_e, ssh: HostConfig, name: string) =>
     attempt(() => createSession(ssh, name))
   )
-  ipcMain.handle('tmux:kill', (_e, ssh: SshConfig, name: string) =>
+  ipcMain.handle('tmux:kill', (_e, ssh: HostConfig, name: string) =>
     attempt(() => killSession(ssh, name))
   )
-  ipcMain.handle('tmux:rename', (_e, ssh: SshConfig, from: string, to: string) =>
+  ipcMain.handle('tmux:rename', (_e, ssh: HostConfig, from: string, to: string) =>
     attempt(() => renameSession(ssh, from, to))
   )
 
   ipcMain.handle(
     'pty:attach',
-    (_e, id: string, ssh: SshConfig, sessionName: string, cols: number, rows: number) => {
+    (_e, id: string, ssh: HostConfig, sessionName: string, cols: number, rows: number) =>
       ptys.attach(id, ssh, sessionName, cols, rows)
-    }
   )
   ipcMain.handle('pty:write', (_e, id: string, data: string) => ptys.write(id, data))
   ipcMain.handle('pty:resize', (_e, id: string, cols: number, rows: number) =>
@@ -683,11 +731,11 @@ function registerIpc(): void {
   )
   ipcMain.handle('pty:kill', (_e, id: string) => ptys.kill(id))
 
-  ipcMain.handle('tunnel:sync', (_e, ssh: SshConfig) => tunnels.sync(ssh))
+  ipcMain.handle('tunnel:sync', (_e, ssh: HostConfig) => tunnels.sync(ssh))
   ipcMain.handle('tunnel:status', () => tunnels.status())
-  ipcMain.handle('tmux:mouse', () => attempt(() => getMouseMode(configStore.current.ssh)))
+  ipcMain.handle('tmux:mouse', () => attempt(() => getMouseMode(host())))
   ipcMain.handle('tmux:set-mouse', (_e, on: boolean) =>
-    attempt(() => setMouseMode(configStore.current.ssh, on))
+    attempt(() => setMouseMode(host(), on))
   )
 
   // What the toolbar chip does: tear the forwards down and put them back up.
@@ -699,10 +747,10 @@ function registerIpc(): void {
   ipcMain.handle('activity:clear', () => activity.clear())
 
   ipcMain.handle('files:list', (_e, path: string) =>
-    attempt(() => listDir(configStore.current.ssh, path))
+    attempt(() => listDir(host(), path))
   )
   ipcMain.handle('files:preview', (_e, path: string) =>
-    attempt(() => previewFile(configStore.current.ssh, path))
+    attempt(() => previewFile(host(), path))
   )
   /*
    * Ask where to put it before fetching a byte. The save dialog is also the
@@ -718,7 +766,7 @@ function registerIpc(): void {
       })
       if (result.canceled || !result.filePath) return { saved: false as const }
       const to = result.filePath
-      const bytes = await downloadFile(configStore.current.ssh, path, to, (done) =>
+      const bytes = await downloadFile(host(), path, to, (done) =>
         send('files:progress', path, done, size)
       )
       return { saved: true as const, path: to, bytes }

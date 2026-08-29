@@ -1,4 +1,4 @@
-export const CONFIG_VERSION = 5 as const
+export const CONFIG_VERSION = 6 as const
 
 /**
  * One local port forward: a port on the remote host, reached over the SSH
@@ -14,8 +14,20 @@ export interface Tunnel {
   remotePort: number
 }
 
-/** One SSH target for the whole app. Tabs are tmux sessions living on it. */
-export interface SshConfig {
+/**
+ * Where the tmux sessions live: another machine over ssh, or this one.
+ *
+ * `local` is not a special case bolted on the side — it is the same workspace
+ * with the ssh hop removed. Every command still goes through `remote()`, which
+ * runs it through a login shell here instead of handing it to ssh, so sessions,
+ * profiles and the file browser all behave identically either way.
+ */
+export type HostKind = 'ssh' | 'local'
+
+/** One target for the tab strip. Tabs are the tmux sessions living on it. */
+export interface HostConfig {
+  kind: HostKind
+  /** The ssh destination. Empty, and unused, when `kind` is "local". */
   host: string
   /** Extra flags for the ssh binary, e.g. ["-i", "/path/key.pem"]. */
   args: string[]
@@ -23,6 +35,48 @@ export interface SshConfig {
   newSessionCommand?: string
   /** Local port forwards held open for as long as a host is configured. */
   tunnels: Tunnel[]
+}
+
+/**
+ * A configured host, as it appears in the switcher.
+ *
+ * The active profile is per-host on purpose: profiles are stored *on* the host
+ * they decorate, so "default" on one box has nothing to do with "default" on
+ * another, and switching hosts has to bring its own profile choice with it.
+ */
+export interface HostEntry extends HostConfig {
+  id: string
+  /** What the switcher shows. Falls back to the ssh destination when blank. */
+  name: string
+  activeProfile: string
+}
+
+/** A local host needs nothing filled in; an ssh one needs somewhere to go. */
+export function hostConfigured(h: HostConfig): boolean {
+  return h.kind === 'local' || !!h.host.trim()
+}
+
+/** How a host reads in a chip, a menu or a title. */
+export function hostLabel(h: HostEntry): string {
+  return h.name.trim() || (h.kind === 'local' ? 'Local' : h.host.trim() || 'unnamed host')
+}
+
+/** How a host reads mid-sentence — "no sessions on <this>". */
+export function hostTarget(h: HostConfig): string {
+  return h.kind === 'local' ? 'this machine' : h.host.trim() || 'the host'
+}
+
+export function defaultHost(id: string, partial: Partial<HostEntry> = {}): HostEntry {
+  return {
+    id,
+    name: '',
+    kind: 'ssh',
+    host: '',
+    args: [],
+    tunnels: [],
+    activeProfile: DEFAULT_PROFILE,
+    ...partial
+  }
 }
 
 /** Live state of the background ssh process holding the forwards open. */
@@ -204,30 +258,52 @@ export interface Profile {
 }
 
 /**
- * The per-machine file (`~/.rippon/config.json`). Just enough to open the
- * connection — host, flags, forwards — plus which profile to load from the box.
- * Everything else is in the Profile, remote.
+ * The per-machine file (`~/.rippon/config.json`). Just enough to open a
+ * connection — the hosts, their flags and forwards, and which profile each one
+ * loads. Everything else is in the Profile, on the host.
  */
 export interface LocalConfig {
   version: typeof CONFIG_VERSION
-  ssh: SshConfig
-  /** Name of the profile to load from the host. */
-  activeProfile: string
+  hosts: HostEntry[]
+  activeHostId: string
 }
 
 /**
- * The merged view the renderer works with: local connection fields plus the
- * active profile's presentation. Split back apart by `splitConfig` on save.
+ * The merged view the renderer works with: the whole host list plus the active
+ * host's presentation. Split back apart by `splitConfig` on save.
+ *
+ * The host list is carried whole rather than flattened to the active one, so
+ * the switcher has something to draw without a second round trip — but only the
+ * active host's profile is ever in hand, which is why switching hosts drops the
+ * layout lock exactly as switching profiles does.
  */
 export interface RipponConfig {
   version: typeof CONFIG_VERSION
-  ssh: SshConfig
-  activeProfile: string
+  hosts: HostEntry[]
+  activeHostId: string
   detachHidden: boolean
   views: View[]
   activeViewId?: string
   sessions: Record<string, SessionConfig>
   bookmarks: Bookmark[]
+}
+
+/**
+ * The host the rest of the app means when it says "the host".
+ *
+ * Never null: an empty or dangling `activeHostId` falls back to the first entry,
+ * and the normalizers guarantee there is always at least one. Callers that would
+ * otherwise have to handle "no host configured" get an unconfigured host
+ * instead, which `hostConfigured` answers for.
+ */
+export function activeHost(cfg: { hosts: HostEntry[]; activeHostId: string }): HostEntry {
+  return cfg.hosts.find((h) => h.id === cfg.activeHostId) ?? cfg.hosts[0]
+}
+
+/** Replace the active host in place, keeping its position in the list. */
+export function withActiveHost(cfg: RipponConfig, patch: Partial<HostEntry>): RipponConfig {
+  const id = activeHost(cfg).id
+  return { ...cfg, hosts: cfg.hosts.map((h) => (h.id === id ? { ...h, ...patch } : h)) }
 }
 
 /** Navigation state of a browser pane, pushed from the main process. */
@@ -304,11 +380,7 @@ export function defaultProfile(): Profile {
 }
 
 export function defaultLocalConfig(): LocalConfig {
-  return {
-    version: CONFIG_VERSION,
-    ssh: { host: '', args: [], tunnels: [] },
-    activeProfile: DEFAULT_PROFILE
-  }
+  return { version: CONFIG_VERSION, hosts: [defaultHost('host-1')], activeHostId: 'host-1' }
 }
 
 export function defaultConfig(): RipponConfig {
@@ -319,8 +391,8 @@ export function defaultConfig(): RipponConfig {
 export function mergeConfig(local: LocalConfig, profile: Profile): RipponConfig {
   return {
     version: CONFIG_VERSION,
-    ssh: local.ssh,
-    activeProfile: local.activeProfile,
+    hosts: local.hosts,
+    activeHostId: local.activeHostId,
     detachHidden: profile.detachHidden,
     views: profile.views,
     activeViewId: profile.activeViewId,
@@ -332,7 +404,7 @@ export function mergeConfig(local: LocalConfig, profile: Profile): RipponConfig 
 /** Tear the merged config back into the local file and the remote profile. */
 export function splitConfig(cfg: RipponConfig): { local: LocalConfig; profile: Profile } {
   return {
-    local: { version: CONFIG_VERSION, ssh: cfg.ssh, activeProfile: cfg.activeProfile },
+    local: { version: CONFIG_VERSION, hosts: cfg.hosts, activeHostId: cfg.activeHostId },
     profile: {
       version: CONFIG_VERSION,
       detachHidden: cfg.detachHidden,
@@ -528,32 +600,73 @@ export function normalizeProfile(raw: unknown): Profile {
   }
 }
 
-/** Coerce the local file — including a v1–v4 file that still held everything. */
+/**
+ * Coerce one host entry, from a v6 file or from the single-host shape that
+ * every earlier version stored under `ssh`.
+ */
+function normalizeHost(raw: unknown, index: number): HostEntry {
+  const h = (raw ?? {}) as Record<string, unknown>
+  const kind: HostKind = h.kind === 'local' ? 'local' : 'ssh'
+  const entry: HostEntry = {
+    id: typeof h.id === 'string' && h.id ? h.id : `host-${index + 1}`,
+    name: typeof h.name === 'string' ? h.name : '',
+    kind,
+    host: kind === 'local' ? '' : typeof h.host === 'string' ? h.host : '',
+    args: strings(h.args),
+    // A local host has no ssh to forward over, and its "remote" ports are
+    // already this machine's — so both are dropped rather than kept and ignored.
+    tunnels: kind === 'local' ? [] : normalizeTunnels(h.tunnels),
+    activeProfile:
+      typeof h.activeProfile === 'string' && PROFILE_NAME_RE.test(h.activeProfile)
+        ? h.activeProfile
+        : DEFAULT_PROFILE
+  }
+  if (typeof h.newSessionCommand === 'string' && h.newSessionCommand) {
+    entry.newSessionCommand = h.newSessionCommand
+  }
+  // v1 kept the remote command on the tab; it is the closest thing to a session command.
+  if (!entry.newSessionCommand && typeof h.command === 'string' && h.command) {
+    entry.newSessionCommand = h.command
+  }
+  if (kind === 'local') entry.args = []
+  return entry
+}
+
+/**
+ * Coerce the local file — v6, or any earlier version, which held exactly one
+ * host and stored it inline under `ssh`.
+ *
+ * The result always has at least one host: an empty list would leave the app
+ * with nothing to select and nothing to offer the settings dialog to edit.
+ */
 export function normalizeLocalConfig(raw: unknown): LocalConfig {
   const cfg = (raw ?? {}) as Record<string, unknown>
 
-  // v1 stored ssh settings per tab; carry the first tab's over and drop the rest.
-  const legacyTabs = Array.isArray(cfg.tabs) ? (cfg.tabs as Array<Record<string, unknown>>) : null
-  const rawSsh = (cfg.ssh ?? legacyTabs?.[0]?.ssh ?? {}) as Record<string, unknown>
-
-  const ssh: SshConfig = {
-    host: typeof rawSsh.host === 'string' ? rawSsh.host : '',
-    args: strings(rawSsh.args),
-    newSessionCommand:
-      typeof rawSsh.newSessionCommand === 'string' ? rawSsh.newSessionCommand : undefined,
-    tunnels: normalizeTunnels(rawSsh.tunnels)
-  }
-  // v1 kept the remote command on the tab; it is the closest thing to a session command.
-  if (!ssh.newSessionCommand && typeof rawSsh.command === 'string' && rawSsh.command) {
-    ssh.newSessionCommand = rawSsh.command
+  let hosts: HostEntry[]
+  if (Array.isArray(cfg.hosts) && cfg.hosts.length) {
+    hosts = cfg.hosts.map(normalizeHost)
+  } else {
+    // v1 stored ssh settings per tab; carry the first tab's over and drop the rest.
+    const legacyTabs = Array.isArray(cfg.tabs) ? (cfg.tabs as Array<Record<string, unknown>>) : null
+    const rawSsh = (cfg.ssh ?? legacyTabs?.[0]?.ssh ?? {}) as Record<string, unknown>
+    hosts = [normalizeHost({ ...rawSsh, kind: 'ssh', activeProfile: cfg.activeProfile }, 0)]
   }
 
-  const activeProfile =
-    typeof cfg.activeProfile === 'string' && PROFILE_NAME_RE.test(cfg.activeProfile)
-      ? cfg.activeProfile
-      : DEFAULT_PROFILE
+  // Ids must be unique or host selection picks the wrong one.
+  const seen = new Set<string>()
+  hosts = hosts.map((h, i) => {
+    let id = h.id
+    while (seen.has(id)) id = `${id}-${i}`
+    seen.add(id)
+    return { ...h, id }
+  })
 
-  return { version: CONFIG_VERSION, ssh, activeProfile }
+  const activeHostId =
+    typeof cfg.activeHostId === 'string' && hosts.some((h) => h.id === cfg.activeHostId)
+      ? cfg.activeHostId
+      : hosts[0].id
+
+  return { version: CONFIG_VERSION, hosts, activeHostId }
 }
 
 /** Coerce anything into the merged shape the renderer uses. */
@@ -568,7 +681,7 @@ export function normalizeConfig(raw: unknown): RipponConfig {
 export function looksLikeLegacyConfig(raw: unknown): boolean {
   if (!raw || typeof raw !== 'object') return false
   const r = raw as Record<string, unknown>
-  if ('activeProfile' in r) return false
+  if ('hosts' in r || 'activeProfile' in r) return false
   return (
     'views' in r ||
     'sessions' in r ||

@@ -2,13 +2,16 @@ import { EventEmitter } from 'node:events'
 import os from 'node:os'
 import * as pty from 'node-pty'
 import { activity } from './activity'
-import { attachArgs } from './tmux'
-import type { SshConfig } from '../shared/types'
+import { localEnv } from './local'
+import { attachSpec } from './tmux'
+import type { HostConfig } from '../shared/types'
 
 /**
  * We shell out to the system `ssh` binary rather than speaking SSH ourselves,
  * so ~/.ssh/config aliases, ProxyJump, agent forwarding and interactive MFA
- * prompts all behave exactly as they do in a normal terminal.
+ * prompts all behave exactly as they do in a normal terminal. A local host
+ * skips ssh and runs tmux through a login shell, which is the same idea one hop
+ * closer: whatever the user's terminal would do, we do.
  */
 export class PtyManager extends EventEmitter {
   private sessions = new Map<string, pty.IPty>()
@@ -18,18 +21,31 @@ export class PtyManager extends EventEmitter {
     return this.sessions.has(id)
   }
 
-  attach(id: string, ssh: SshConfig, session: string, cols: number, rows: number): void {
+  /**
+   * Async only because a local attach needs the login shell's PATH, which is
+   * resolved once and cached — every call after the first settles immediately.
+   * A second attach for the same id while the first is still resolving would
+   * leave an orphan, so the kill happens on both sides of the await.
+   */
+  async attach(
+    id: string,
+    ssh: HostConfig,
+    session: string,
+    cols: number,
+    rows: number
+  ): Promise<void> {
     this.kill(id)
 
-    const proc = pty.spawn('ssh', attachArgs(ssh, session), {
+    const { file, args } = attachSpec(ssh, session)
+    const env = ssh.kind === 'local' ? await localEnv() : process.env
+    this.kill(id)
+
+    const proc = pty.spawn(file, args, {
       name: 'xterm-256color',
       cols: Math.max(cols, 2),
       rows: Math.max(rows, 2),
       cwd: os.homedir(),
-      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<
-        string,
-        string
-      >
+      env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>
     })
 
     this.sessions.set(id, proc)
@@ -38,7 +54,7 @@ export class PtyManager extends EventEmitter {
     proc.onExit(({ exitCode }) => {
       this.sessions.delete(id)
       // A pane the user closed exits 0 through kill() below; a non-zero code
-      // here is ssh or tmux giving up on its own, which is worth a line.
+      // here is ssh, the shell or tmux giving up on its own — worth a line.
       activity.add('pane', exitCode ? 'warn' : 'info', `${session} detached (code ${exitCode})`)
       this.emit('exit', id, exitCode)
     })
@@ -68,7 +84,7 @@ export class PtyManager extends EventEmitter {
     }
   }
 
-  /** Kills the local ssh client only — the tmux session keeps running remotely. */
+  /** Kills the client only — the tmux session keeps running on the host. */
   kill(id: string): void {
     const proc = this.sessions.get(id)
     if (!proc) return

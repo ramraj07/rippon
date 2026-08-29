@@ -4,7 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { activity } from './activity'
-import { SESSION_NAME_RE, type ActivitySource, type SessionInfo, type SshConfig } from '../shared/types'
+import { attachCommand, runLocal } from './local'
+import {
+  hostConfigured,
+  SESSION_NAME_RE,
+  type ActivitySource,
+  type SessionInfo,
+  type HostConfig
+} from '../shared/types'
 
 const exec = promisify(execFile)
 
@@ -68,16 +75,20 @@ function soloArgs(): string[] {
   return [...KEEPALIVE_ARGS, '-o', 'ControlPath=none']
 }
 
-/** Args for the interactive PTY connection that attaches to a session. */
-export function attachArgs(ssh: SshConfig, session: string): string[] {
+/**
+ * What to spawn in a PTY to put a session on screen.
+ *
+ * A pair rather than a bare argv, because a local host runs `tmux` through a
+ * login shell while a remote one runs `ssh` — the same attach either way, with
+ * one fewer process in the middle.
+ */
+export function attachSpec(host: HostConfig, session: string): { file: string; args: string[] } {
   assertName(session)
-  return [
-    '-tt',
-    ...controlArgs(),
-    ...ssh.args,
-    ssh.host,
-    `tmux -u new-session -A -s ${session}`
-  ]
+  if (host.kind === 'local') return attachCommand(session)
+  return {
+    file: 'ssh',
+    args: ['-tt', ...controlArgs(), ...host.args, host.host, `tmux -u new-session -A -s ${session}`]
+  }
 }
 
 function assertName(name: string): void {
@@ -120,7 +131,7 @@ function describe(err: unknown, command: string): string {
       }`
     : typeof e.code === 'string'
       ? e.code === 'ENOENT'
-        ? 'ENOENT — no ssh binary on PATH'
+        ? 'ENOENT — the binary is not on PATH'
         : e.code
       : typeof e.code === 'number'
         ? `exit ${e.code}`
@@ -172,7 +183,7 @@ export function wedged(err: unknown): boolean {
  * the caller's timeout and mistaken for a hang.
  */
 export async function probe(
-  ssh: SshConfig,
+  ssh: HostConfig,
   timeoutMs: number
 ): Promise<{ ms: number; stderr: string }> {
   const started = Date.now()
@@ -192,7 +203,7 @@ export async function probe(
 }
 
 /** Ask the multiplexing master to exit. Best-effort: a failure here is fine. */
-export async function resetMaster(ssh: SshConfig): Promise<void> {
+export async function resetMaster(ssh: HostConfig): Promise<void> {
   try {
     await exec('ssh', [...controlArgs(), ...ssh.args, '-O', 'exit', ssh.host], { timeout: 5000 })
     activity.add('ssh', 'info', 'shared connection torn down (-O exit)')
@@ -206,7 +217,7 @@ export async function resetMaster(ssh: SshConfig): Promise<void> {
 }
 
 function runOnce(
-  ssh: SshConfig,
+  ssh: HostConfig,
   command: string,
   args: string[],
   opts: RemoteOptions
@@ -242,11 +253,11 @@ function runOnce(
  * reported as-is, so this never doubles the wait for the common case.
  */
 export async function remote(
-  ssh: SshConfig,
+  ssh: HostConfig,
   command: string,
   opts: RemoteOptions = {}
 ): Promise<string> {
-  if (!ssh.host) throw new Error('No SSH host configured.')
+  if (!hostConfigured(ssh)) throw new Error('No SSH host configured.')
   const source = opts.source ?? 'ssh'
   const label = opts.label ?? command.replace(/\s+/g, ' ').slice(0, 60)
   const started = Date.now()
@@ -257,6 +268,21 @@ export async function remote(
     const suffix = fresh ? ' (on a fresh connection)' : ''
     activity.add(source, 'ok', `${label}${summary ? ` → ${summary}` : ''}${suffix}`, { ms: since() })
     return stdout
+  }
+
+  /*
+   * A local host takes the short path: same command, same logging, same error
+   * formatting — but there is no connection to share, so there is also nothing
+   * to be wedged and nothing to retry on. A failure here is the command's own.
+   */
+  if (ssh.kind === 'local') {
+    try {
+      return ok(await runLocal(command, { stdin: opts.stdin, maxBuffer: opts.maxBuffer }), false)
+    } catch (err) {
+      const text = describe(err, command)
+      activity.add(source, 'error', label, { ms: since(), detail: text })
+      throw new Error(text)
+    }
   }
 
   try {
@@ -284,7 +310,7 @@ export async function remote(
   }
 }
 
-export async function listSessions(ssh: SshConfig): Promise<SessionInfo[]> {
+export async function listSessions(ssh: HostConfig): Promise<SessionInfo[]> {
   let stdout: string
   try {
     stdout = await remote(ssh, `tmux list-sessions -F '${LIST_FORMAT}'`, {
@@ -329,7 +355,7 @@ export async function listSessions(ssh: SshConfig): Promise<SessionInfo[]> {
     .sort((a, b) => a.created - b.created || a.name.localeCompare(b.name))
 }
 
-export async function createSession(ssh: SshConfig, name: string): Promise<void> {
+export async function createSession(ssh: HostConfig, name: string): Promise<void> {
   assertName(name)
   const command = ssh.newSessionCommand?.trim()
   await remote(ssh, `tmux new-session -d -s ${name}${command ? ` ${command}` : ''}`, {
@@ -338,7 +364,7 @@ export async function createSession(ssh: SshConfig, name: string): Promise<void>
   })
 }
 
-export async function killSession(ssh: SshConfig, name: string): Promise<void> {
+export async function killSession(ssh: HostConfig, name: string): Promise<void> {
   assertName(name)
   try {
     await remote(ssh, `tmux kill-session -t ${name}`, {
@@ -362,7 +388,7 @@ export async function killSession(ssh: SshConfig, name: string): Promise<void> {
  * lands: xterm marks a grabbed mouse with `enable-mouse-events`, which is what
  * makes ⌥-drag and the buffer copies in the context menu behave.
  */
-export async function getMouseMode(ssh: SshConfig): Promise<boolean | null> {
+export async function getMouseMode(ssh: HostConfig): Promise<boolean | null> {
   try {
     const out = await remote(ssh, 'tmux show -gv mouse', {
       source: 'tmux',
@@ -377,14 +403,14 @@ export async function getMouseMode(ssh: SshConfig): Promise<boolean | null> {
   }
 }
 
-export async function setMouseMode(ssh: SshConfig, on: boolean): Promise<void> {
+export async function setMouseMode(ssh: HostConfig, on: boolean): Promise<void> {
   await remote(ssh, `tmux set -g mouse ${on ? 'on' : 'off'}`, {
     source: 'tmux',
     label: `mouse ${on ? 'on' : 'off'}`
   })
 }
 
-export async function renameSession(ssh: SshConfig, from: string, to: string): Promise<void> {
+export async function renameSession(ssh: HostConfig, from: string, to: string): Promise<void> {
   assertName(from)
   assertName(to)
   await remote(ssh, `tmux rename-session -t ${from} ${to}`, {

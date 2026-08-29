@@ -1,12 +1,17 @@
 import { remote } from './tmux'
-import { defaultProfile, normalizeProfile, PROFILE_NAME_RE, type Profile, type SshConfig } from '../shared/types'
+import { defaultProfile, normalizeProfile, PROFILE_NAME_RE, type Profile, type HostConfig } from '../shared/types'
 
 /**
- * Profiles live on the remote host, under `~/.rippon/profiles/<name>.json` in
- * the SSH user's home. Same multiplexed connection as tmux/tunnels, so reads and
- * writes cost no extra handshake. Names are validated to the tmux-safe subset
- * before they ever reach a shell, so it is safe to interpolate them into the
- * remote command — the JSON payload only ever travels over stdin, never inline.
+ * Profiles live on the host, under `~/.rippon/profiles/<name>.json` in the SSH
+ * user's home — or your own, for a local host. Same multiplexed connection as
+ * tmux/tunnels, so reads and writes cost no extra handshake. Names are validated
+ * to the tmux-safe subset before they ever reach a shell, so it is safe to
+ * interpolate them into the command — the JSON payload only ever travels over
+ * stdin, never inline.
+ *
+ * Every command here is plain POSIX, which is what lets the same module serve a
+ * local host: `sh` on a Mac runs these exactly as a Linux host's does. That is
+ * not true of files.ts, which speaks GNU coreutils and takes a separate path.
  */
 
 const REMOTE_DIR = '~/.rippon/profiles'
@@ -29,18 +34,18 @@ function remotePath(name: string): string {
  */
 
 /** Run a remote command and return its stdout. */
-function sshRead(ssh: SshConfig, command: string, label: string): Promise<string> {
+function sshRead(ssh: HostConfig, command: string, label: string): Promise<string> {
   return remote(ssh, command, { maxBuffer: 4 * 1024 * 1024, source: 'profile', label })
 }
 
 /** Run a remote command, ignoring stdout. */
-async function sshRun(ssh: SshConfig, command: string, label: string): Promise<void> {
+async function sshRun(ssh: HostConfig, command: string, label: string): Promise<void> {
   await remote(ssh, command, { source: 'profile', label })
 }
 
 /** Run a remote command with `text` piped to its stdin. */
 async function sshWrite(
-  ssh: SshConfig,
+  ssh: HostConfig,
   command: string,
   text: string,
   label: string
@@ -48,7 +53,7 @@ async function sshWrite(
   await remote(ssh, command, { stdin: text, source: 'profile', label })
 }
 
-export async function listProfiles(ssh: SshConfig): Promise<string[]> {
+export async function listProfiles(ssh: HostConfig): Promise<string[]> {
   const stdout = await sshRead(ssh, `ls -1 ${REMOTE_DIR} 2>/dev/null || true`, 'list profiles')
   return stdout
     .split('\n')
@@ -73,7 +78,7 @@ const MISSING = '__rippon_no_profile__'
  * unreadable one. It also keeps the activity log honest, since the old version
  * logged every first run as an error.
  */
-export async function readProfile(ssh: SshConfig, name: string): Promise<Profile | null> {
+export async function readProfile(ssh: HostConfig, name: string): Promise<Profile | null> {
   assertName(name)
   const file = remotePath(name)
   const stdout = await sshRead(
@@ -91,7 +96,7 @@ export async function readProfile(ssh: SshConfig, name: string): Promise<Profile
 }
 
 /** Atomically write a profile (temp file then rename), creating the dir. */
-export async function writeProfile(ssh: SshConfig, name: string, profile: Profile): Promise<void> {
+export async function writeProfile(ssh: HostConfig, name: string, profile: Profile): Promise<void> {
   assertName(name)
   const text = JSON.stringify(profile, null, 2) + '\n'
   const tmp = `${REMOTE_DIR}/.${name}.${process.pid}.tmp`
@@ -104,7 +109,7 @@ export async function writeProfile(ssh: SshConfig, name: string, profile: Profil
 }
 
 /** Create a fresh profile from the defaults, refusing to clobber an existing one. */
-export async function createProfile(ssh: SshConfig, name: string): Promise<void> {
+export async function createProfile(ssh: HostConfig, name: string): Promise<void> {
   assertName(name)
   const text = JSON.stringify(defaultProfile(), null, 2) + '\n'
   const tmp = `${REMOTE_DIR}/.${name}.${process.pid}.tmp`
@@ -116,7 +121,7 @@ export async function createProfile(ssh: SshConfig, name: string): Promise<void>
   )
 }
 
-export async function renameProfile(ssh: SshConfig, from: string, to: string): Promise<void> {
+export async function renameProfile(ssh: HostConfig, from: string, to: string): Promise<void> {
   assertName(from)
   assertName(to)
   if (from === to) return
@@ -127,7 +132,7 @@ export async function renameProfile(ssh: SshConfig, from: string, to: string): P
   )
 }
 
-export async function deleteProfile(ssh: SshConfig, name: string): Promise<void> {
+export async function deleteProfile(ssh: HostConfig, name: string): Promise<void> {
   assertName(name)
   await sshRun(ssh, `rm -f ${remotePath(name)}`, `delete ${name}.json`)
 }

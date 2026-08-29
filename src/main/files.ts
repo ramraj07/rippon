@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { activity } from './activity'
+import { localDownload, localListDir, localPreview } from './local'
 import { controlArgs, remote } from './tmux'
-import type { RemoteEntry, RemoteListing, RemotePreview, SshConfig } from '../shared/types'
+import type { RemoteEntry, RemoteListing, RemotePreview, HostConfig } from '../shared/types'
 
 /**
  * Reading the remote filesystem over the same multiplexed connection as
@@ -15,7 +16,10 @@ import type { RemoteEntry, RemoteListing, RemotePreview, SshConfig } from '../sh
  *
  * These commands assume GNU coreutils — `find -printf`, `stat -c`, `head -c` —
  * which is what a Linux host has. A BSD or macOS remote would need its own
- * spellings, and would fail loudly rather than silently misreport.
+ * spellings, and would fail loudly rather than silently misreport. A *local*
+ * host is exactly that case, so it does not come through here at all: each
+ * entry point hands off to local.ts, which reads the filesystem through node
+ * rather than keeping a second dialect of shell in sync with this one.
  */
 
 /** Biggest slice of a file we will pull back to show. */
@@ -85,7 +89,8 @@ function parseEntries(text: string): RemoteEntry[] {
 }
 
 /** List one directory. `path` may be relative, `~`-rooted, or contain `..`. */
-export async function listDir(ssh: SshConfig, path: string): Promise<RemoteListing> {
+export async function listDir(ssh: HostConfig, path: string): Promise<RemoteListing> {
+  if (ssh.kind === 'local') return localListDir(path)
   const target = path.trim() || '~'
   // `cd` first so the shell resolves ~, .. and symlinks for us, then report where
   // that actually landed — the browser navigates by absolute path from then on.
@@ -137,7 +142,8 @@ function imageType(path: string): string | null {
  * quietly corrupt anything that is not text. Encoding first means the bytes
  * arrive intact and what they are gets decided here.
  */
-export async function previewFile(ssh: SshConfig, path: string): Promise<RemotePreview> {
+export async function previewFile(ssh: HostConfig, path: string): Promise<RemotePreview> {
+  if (ssh.kind === 'local') return localPreview(path)
   const stdout = await remote(
     ssh,
     `stat -c '%s' ${expand(path)} && echo ${SEP} && head -c ${PREVIEW_BYTES} ${expand(path)} | base64`,
@@ -175,11 +181,12 @@ export async function previewFile(ssh: SshConfig, path: string): Promise<RemoteP
  * prompt — which is the constraint the rest of the app is built around too.
  */
 export function downloadFile(
-  ssh: SshConfig,
+  ssh: HostConfig,
   path: string,
   localPath: string,
   onProgress: (bytes: number) => void
 ): Promise<number> {
+  if (ssh.kind === 'local') return localDownload(path, localPath, onProgress)
   return new Promise((resolve, reject) => {
     const child = spawn(
       'ssh',

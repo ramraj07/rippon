@@ -7,7 +7,8 @@ import type {
   FindMatches,
   RipponConfig,
   SessionInfo,
-  SshConfig,
+  HostConfig,
+  HostEntry,
   TunnelStatus
 } from '../shared/types'
 
@@ -46,12 +47,18 @@ const api = {
     /** Fetch the profile from the host. Also the reconnect retry. */
     connect: (): Promise<ConfigPayload> => ipcRenderer.invoke('config:connect'),
     save: (cfg: RipponConfig): Promise<void> => ipcRenderer.invoke('config:save', cfg),
-    saveLocal: (ssh: SshConfig, activeProfile: string): Promise<void> =>
-      ipcRenderer.invoke('config:save-local', ssh, activeProfile),
+    /** Persist the host list alone, dropping the profile lock. */
+    saveHosts: (hosts: HostEntry[], activeHostId: string): Promise<void> =>
+      ipcRenderer.invoke('config:save-hosts', hosts, activeHostId),
     choosePath: (): Promise<void> => ipcRenderer.invoke('config:choose-path'),
     onChanged: (
       cb: (cfg: RipponConfig, path: string, profiles: string[], loaded: boolean) => void
     ) => on<[RipponConfig, string, string[], boolean]>('config:changed', cb)
+  },
+  host: {
+    /** Switch hosts and fetch that host's profile. */
+    use: (id: string): Promise<Result<{ config: RipponConfig; profiles: string[] }>> =>
+      ipcRenderer.invoke('host:use', id)
   },
   profile: {
     use: (name: string): Promise<Result<{ config: RipponConfig; profiles: string[] }>> =>
@@ -63,19 +70,19 @@ const api = {
     delete: (name: string): Promise<Result<string[]>> => ipcRenderer.invoke('profile:delete', name)
   },
   tmux: {
-    list: (ssh: SshConfig): Promise<Result<SessionInfo[]>> => ipcRenderer.invoke('tmux:list', ssh),
-    create: (ssh: SshConfig, name: string): Promise<Result<void>> =>
+    list: (ssh: HostConfig): Promise<Result<SessionInfo[]>> => ipcRenderer.invoke('tmux:list', ssh),
+    create: (ssh: HostConfig, name: string): Promise<Result<void>> =>
       ipcRenderer.invoke('tmux:create', ssh, name),
-    kill: (ssh: SshConfig, name: string): Promise<Result<void>> =>
+    kill: (ssh: HostConfig, name: string): Promise<Result<void>> =>
       ipcRenderer.invoke('tmux:kill', ssh, name),
-    rename: (ssh: SshConfig, from: string, to: string): Promise<Result<void>> =>
+    rename: (ssh: HostConfig, from: string, to: string): Promise<Result<void>> =>
       ipcRenderer.invoke('tmux:rename', ssh, from, to),
     /** Server-wide mouse mode; null when no tmux server is running yet. */
     mouseMode: (): Promise<Result<boolean | null>> => ipcRenderer.invoke('tmux:mouse'),
     setMouseMode: (on: boolean): Promise<Result<void>> => ipcRenderer.invoke('tmux:set-mouse', on)
   },
   pty: {
-    attach: (id: string, ssh: SshConfig, session: string, cols: number, rows: number): Promise<void> =>
+    attach: (id: string, ssh: HostConfig, session: string, cols: number, rows: number): Promise<void> =>
       ipcRenderer.invoke('pty:attach', id, ssh, session, cols, rows),
     write: (id: string, data: string): Promise<void> => ipcRenderer.invoke('pty:write', id, data),
     resize: (id: string, cols: number, rows: number): Promise<void> =>
@@ -85,7 +92,7 @@ const api = {
     onExit: (cb: (id: string, code: number) => void) => on<[string, number]>('pty:exit', cb)
   },
   tunnel: {
-    sync: (ssh: SshConfig): Promise<void> => ipcRenderer.invoke('tunnel:sync', ssh),
+    sync: (ssh: HostConfig): Promise<void> => ipcRenderer.invoke('tunnel:sync', ssh),
     status: (): Promise<TunnelStatus> => ipcRenderer.invoke('tunnel:status'),
     /** Tear the forwards down and bring them straight back up. */
     restart: (): Promise<void> => ipcRenderer.invoke('tunnel:restart'),

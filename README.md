@@ -2,9 +2,12 @@
 
 Tabbed workspace for driving remote coding agents.
 
-**One SSH host for the whole app. Tabs are the tmux sessions running on it.** The tab strip is a
-live view of `tmux list-sessions` — a session an agent spawns on the box shows up as a tab within
-seconds, and a session killed elsewhere takes its tab with it.
+**One host at a time. Tabs are the tmux sessions running on it.** The tab strip is a live view of
+`tmux list-sessions` — a session an agent spawns on the box shows up as a tab within seconds, and a
+session killed elsewhere takes its tab with it.
+
+A host is either another machine over SSH or **this one**. Configure as many as you like and switch
+between them from the title bar; each keeps its own sessions, its own layout and its own profiles.
 
 Each tab is a split pane:
 
@@ -22,7 +25,8 @@ npm run dev     # dev, with HMR on the renderer
 npm run build && npm start   # production bundle
 ```
 
-First launch opens SSH settings. Fill in the host and any flags, and the tab strip populates.
+First launch opens Settings. Add a host — an SSH destination, or **This Mac** — and the tab strip
+populates.
 
 ## Building an app
 
@@ -108,29 +112,72 @@ every session as a tab.
 Session names are restricted to `[A-Za-z0-9_-]` — tmux forbids `.` and `:`, and anything needing
 shell quoting would have to survive a trip through `ssh`.
 
+## Hosts
+
+The title bar shows the host you are pointed at. Click the name to switch, the gear to manage the
+list. Each host carries its own connection settings, its own forwards, and its own choice of
+profile — and because profiles live *on* the host, switching hosts swaps the entire workspace:
+different sessions, different views, different bookmarks.
+
+Switching is a reconnect. Panes are dropped and forwards come down, then the new host's profile
+loads and its sessions appear. The tmux sessions on the host you left keep running, exactly as they
+do when you close the app.
+
+### Local hosts
+
+A host of kind `local` runs everything on this Mac with no SSH in the way: tabs are your own
+`tmux list-sessions`, profiles are files under `~/.rippon/profiles`, and the file browser reads the
+disk directly. Port forwards are not offered, because there is nothing to forward — the ports are
+already yours.
+
+`tmux` is found through your **login shell**, not the app's inherited environment. An app launched
+from Finder gets a bare `/usr/bin:/bin:/usr/sbin:/sbin`, which is why a Homebrew tmux would
+otherwise be invisible to it; Rippon asks `$SHELL -l` for its `PATH` once at first use and reuses
+it, so whatever your terminal can run, this can. The resolved `PATH` is logged in the activity log.
+
 ## Config
 
 Config is split in two, along the line between *connecting* and *what you see*.
 
 **The local file** — `~/.rippon/config.json`, per-machine, relocatable with `⌘⇧O`. Just enough to
-open the connection, plus which profile to load:
+open a connection, plus which profile each host loads:
 
 ```jsonc
 {
-  "version": 5,
-  "ssh": {
-    "host": "ubuntu@10.223.234.74",
-    "args": ["-i", "/Users/you/rv-prototype-key.pem"],
-    "newSessionCommand": "claude",  // optional, runs inside each session you create
-    "tunnels": [                     // optional local forwards (ssh -L)
-      { "localPort": 8080, "remoteHost": "localhost", "remotePort": 3000 }
-    ]
-  },
-  "activeProfile": "default"
+  "version": 6,
+  "hosts": [
+    {
+      "id": "host-1",
+      "name": "agent box",              // optional label; blank falls back to `host`
+      "kind": "ssh",
+      "host": "ubuntu@10.223.234.74",
+      "args": ["-i", "/Users/you/rv-prototype-key.pem"],
+      "newSessionCommand": "claude",    // optional, runs inside each session you create
+      "tunnels": [                       // optional local forwards (ssh -L)
+        { "localPort": 8080, "remoteHost": "localhost", "remotePort": 3000 }
+      ],
+      "activeProfile": "default"
+    },
+    {
+      "id": "host-2",
+      "name": "",
+      "kind": "local",                   // this Mac; `host`, `args` and `tunnels` are unused
+      "host": "",
+      "args": [],
+      "tunnels": [],
+      "activeProfile": "default"
+    }
+  ],
+  "activeHostId": "host-1"
 }
 ```
 
-**Profiles** — `~/.rippon/profiles/<name>.json` in the SSH user's home *on the remote host*. Each
+A v5 file — one host, stored inline under `ssh` — is migrated on load into a single-entry `hosts`
+list, keeping its flags, forwards and profile. The file is rewritten in the new shape at the next
+save.
+
+**Profiles** — `~/.rippon/profiles/<name>.json` in the SSH user's home on the host (your own home
+directory, for a local host). Each
 holds the presentation: views, tab/tile layout, per-session browser URL and split ratio, bookmarks,
 `detachHidden`. This lives next to the tmux sessions it decorates, so your layout follows the box
 you work on rather than the laptop you sit at — no synced folder to set up. The SSH login is the
@@ -140,7 +187,7 @@ in that user's home.
 ```jsonc
 // ~/.rippon/profiles/default.json, on the host
 {
-  "version": 5,
+  "version": 6,
   "detachHidden": false,
   "views": [ /* … */ ],
   "activeViewId": "view-main",
@@ -154,8 +201,9 @@ in that user's home.
 Switch, create, rename or delete profiles from the **`<name> ▾`** chip in the title bar. Different
 people (or the same person, different tasks) sharing one SSH login just pick different profiles.
 
-Because the presentation is remote, **startup waits on the connection** — there is no local copy to
-fall back on. The local file is read first and needs no network, so the window opens straight away
+Because the presentation belongs to the host, **startup waits on the connection** — there is no
+separate local copy to fall back on. (A local host still goes through this, but the "connection" is
+a filesystem read, so it is over before the window paints.) The local file is read first and needs no network, so the window opens straight away
 showing the host and profile it is about to load; until that profile actually arrives there is no
 workspace, so you get a connect screen instead of an empty one, and nothing that edits a profile is
 reachable. That is deliberate: a layout the app invented must never be offered for editing, because

@@ -1,7 +1,7 @@
 import { activity } from './activity'
 import { probe, resetMaster, wedged } from './tmux'
 import type { TunnelManager } from './tunnel'
-import type { SshConfig } from '../shared/types'
+import type { HostConfig } from '../shared/types'
 
 /**
  * Watches the shared ssh connection and the port forwarder, and clears up after
@@ -60,7 +60,7 @@ export class HealthMonitor {
   private saturated = false
 
   constructor(
-    private readonly ssh: () => SshConfig,
+    private readonly ssh: () => HostConfig,
     private readonly tunnels: TunnelManager,
     /** Whether a user is actually there: window in front, screen unlocked. */
     private readonly active: () => boolean
@@ -86,7 +86,12 @@ export class HealthMonitor {
     // another, which is the pile-up the forwarder used to suffer from.
     if (this.busy || !this.active()) return
     const ssh = this.ssh()
-    if (!ssh.host) return
+    /*
+     * A local host has no connection to supervise. There is no master to wedge,
+     * no forwards to hold open, and probing it would only mean running `true`
+     * against ourselves every ten seconds.
+     */
+    if (ssh.kind === 'local' || !ssh.host) return
 
     this.busy = true
     try {
@@ -97,7 +102,7 @@ export class HealthMonitor {
     }
   }
 
-  private async checkConnection(ssh: SshConfig): Promise<void> {
+  private async checkConnection(ssh: HostConfig): Promise<void> {
     try {
       const { ms, stderr } = await probe(ssh, PROBE_TIMEOUT_MS)
       if (this.strikes || this.repaired) {

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import net from 'node:net'
 import { activity } from './activity'
 import { controlArgs } from './tmux'
-import { tunnelLabel, type SshConfig, type Tunnel, type TunnelStatus } from '../shared/types'
+import { tunnelLabel, type HostConfig, type Tunnel, type TunnelStatus } from '../shared/types'
 
 /**
  * Holds the app's local port forwards open with a single background `ssh -N`.
@@ -21,7 +21,7 @@ export class TunnelManager extends EventEmitter {
   private stderr = ''
   private verbose = false
   /** Kept so the verbose toggle can restart the forwarder as it stands. */
-  private last: SshConfig | null = null
+  private last: HostConfig | null = null
 
   status(): TunnelStatus {
     return this.current
@@ -31,9 +31,10 @@ export class TunnelManager extends EventEmitter {
     return this.verbose
   }
 
-  /** Whether a forwarder ought to be up: a host, and something to forward. */
+  /** Whether a forwarder ought to be up: an ssh host, and something to forward. */
   wants(): boolean {
-    return !!this.last?.host && (this.last.tunnels ?? []).length > 0
+    if (!this.last || this.last.kind === 'local') return false
+    return !!this.last.host && (this.last.tunnels ?? []).length > 0
   }
 
   /**
@@ -81,12 +82,15 @@ export class TunnelManager extends EventEmitter {
   }
 
   /** Reconcile the live forwarder to `ssh.tunnels`. Safe to call on every change. */
-  sync(ssh: SshConfig): void {
+  sync(ssh: HostConfig): void {
     this.stop()
     this.last = ssh
 
     const tunnels = ssh.tunnels ?? []
-    if (!ssh.host || tunnels.length === 0) {
+    // A local host has nothing to forward *from*: its ports are already this
+    // machine's. The config normalizer drops its tunnels, so this is belt and
+    // braces for a config edited by hand.
+    if (ssh.kind === 'local' || !ssh.host || tunnels.length === 0) {
       this.update({ running: false, forwards: [], error: null })
       return
     }

@@ -6,7 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import type { MenuItem } from './Dialogs'
 import FindBar, { type FindHandle } from './FindBar'
-import type { FindMatches, SessionInfo, SshConfig } from '@shared/types'
+import type { FindMatches, SessionInfo, HostConfig } from '@shared/types'
 
 const NO_MATCHES: FindMatches = { active: 0, total: 0 }
 
@@ -20,7 +20,7 @@ export interface TerminalHandle {
 
 interface Props {
   session: SessionInfo
-  ssh: SshConfig
+  ssh: HostConfig
   active: boolean
   /** Drop the ssh client while this tab is hidden, reattaching when it returns. */
   detachWhenHidden: boolean
