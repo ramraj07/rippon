@@ -75,6 +75,19 @@ const SEARCH_OPTIONS: ISearchOptions = {
   }
 }
 
+/**
+ * Drop a pane's WebGL renderer, putting xterm's DOM renderer back. Guarded: a
+ * context that is already lost can fail part-way through, and a throw here
+ * would escape a React cleanup or an event handler.
+ */
+function releaseWebgl(webgl: WebglAddon, id: string): void {
+  try {
+    webgl.dispose()
+  } catch (err) {
+    console.warn(`[rippon] WebGL renderer for ${id} did not dispose cleanly:`, err)
+  }
+}
+
 const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   {
     session,
@@ -97,6 +110,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
+  const webglRef = useRef<WebglAddon | null>(null)
   const findRef = useRef<FindHandle>(null)
   const [finding, setFinding] = useState(false)
   const [matches, setMatches] = useState<FindMatches>(NO_MATCHES)
@@ -204,23 +218,6 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     // Plain-text URLs printed to stdout.
     term.loadAddon(new WebLinksAddon((_event, uri) => openUrlRef.current(uri)))
     term.open(host)
-
-    // The default DOM renderer costs a lot of CPU per pane once an agent starts
-    // producing output, and we run many panes at once. Fall back quietly: if the
-    // GPU context is lost, xterm reverts to the DOM renderer on its own.
-    let webgl: WebglAddon | null = null
-    try {
-      webgl = new WebglAddon()
-      webgl.onContextLoss(() => {
-        webgl?.dispose()
-        webgl = null
-      })
-      term.loadAddon(webgl)
-    } catch (err) {
-      webgl = null
-      // Worth knowing: the DOM fallback is what pegs this renderer under load.
-      console.warn(`[rippon] WebGL terminal renderer unavailable for ${id}:`, err)
-    }
 
     termRef.current = term
     fitRef.current = fit
@@ -330,12 +327,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
        * escaping this cleanup takes the whole React root with it — that is the
        * blank window, with every attached terminal lost.
        */
-      try {
-        webgl?.dispose()
-      } catch {
-        // Already torn down by a context loss, or never fully initialised.
-      }
-      webgl = null
+      if (webglRef.current) releaseWebgl(webglRef.current, id)
+      webglRef.current = null
       try {
         term.dispose()
       } catch (err) {
@@ -363,6 +356,38 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       /* ignore */
     }
   }, [fontSize, id])
+
+  /*
+   * The DOM renderer costs a lot of CPU per pane once an agent starts producing
+   * output, so a pane on screen draws with WebGL. Only while on screen, though:
+   * Chromium allows about sixteen live contexts per page and evicts the oldest
+   * past that, and one per open session ran out long before the tab strip did.
+   * A hidden pane draws nothing anyway — xterm pauses rendering offscreen.
+   */
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    if (!active) {
+      if (webglRef.current) releaseWebgl(webglRef.current, id)
+      webglRef.current = null
+      return
+    }
+    if (webglRef.current) return
+    try {
+      const webgl = new WebglAddon()
+      // Still possible with many tiles on screen; the DOM renderer takes over.
+      webgl.onContextLoss(() => {
+        if (webglRef.current !== webgl) return
+        webglRef.current = null
+        releaseWebgl(webgl, id)
+      })
+      term.loadAddon(webgl)
+      webglRef.current = webgl
+    } catch (err) {
+      // Worth knowing: the DOM fallback is what pegs this renderer under load.
+      console.warn(`[rippon] WebGL terminal renderer unavailable for ${id}:`, err)
+    }
+  }, [active, id])
 
   // Reattach on Enter after a detach.
   useEffect(() => {
