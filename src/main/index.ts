@@ -193,7 +193,9 @@ function createWindow(): void {
       })()`)
 
       const dragWith = async (modifiers: string[]): Promise<void> => {
-        const mods = modifiers as Parameters<typeof wc.sendInputEvent>[0]['modifiers']
+        // Without leftButtonDown the moves carry buttons=0, which xterm reports to
+        // a mouse-mode app as hover — and that input clears the selection.
+        const mods = [...modifiers, 'leftButtonDown'] as Parameters<typeof wc.sendInputEvent>[0]['modifiers']
         wc.sendInputEvent({ type: 'mouseDown', x: x0, y: y0, button: 'left', clickCount: 1, modifiers: mods })
         for (let i = 1; i <= 10; i++) {
           wc.sendInputEvent({
@@ -420,6 +422,22 @@ function buildMenu(): void {
           label: 'Actual Size',
           accelerator: 'CmdOrCtrl+0',
           click: () => send('menu:zoom', 0)
+        },
+        { type: 'separator' },
+        {
+          label: 'Bigger Terminal Text',
+          accelerator: 'CmdOrCtrl+Alt+=',
+          click: () => send('menu:font-size', 1)
+        },
+        {
+          label: 'Smaller Terminal Text',
+          accelerator: 'CmdOrCtrl+Alt+-',
+          click: () => send('menu:font-size', -1)
+        },
+        {
+          label: 'Default Terminal Text Size',
+          accelerator: 'CmdOrCtrl+Alt+0',
+          click: () => send('menu:font-size', 0)
         },
         { type: 'separator' },
         { role: 'toggleDevTools' },

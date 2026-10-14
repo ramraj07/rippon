@@ -27,6 +27,8 @@ import {
   defaultSession,
   defaultView,
   clampZoom,
+  clampFontSize,
+  FONT_SIZE_DEFAULT,
   hostConfigured,
   hostLabel,
   hostTarget,
@@ -1006,6 +1008,14 @@ export default function App(): JSX.Element {
             zoom: step === 0 ? 1 : clampZoom(v.zoom * (step > 0 ? 1.1 : 1 / 1.1))
           }))
         }
+        case 'menu:font-size': {
+          const step = typeof payload === 'number' ? payload : 0
+          const cur = configRef.current
+          return commit({
+            ...cur,
+            fontSize: step === 0 ? FONT_SIZE_DEFAULT : clampFontSize(cur.fontSize + step)
+          })
+        }
         case 'menu:close-tab':
           return name ? setDialog({ kind: 'close-session', name }) : undefined
         case 'menu:cycle-view': {
@@ -1040,7 +1050,7 @@ export default function App(): JSX.Element {
           return findable()?.stepFind(payload === -1 ? -1 : 1)
       }
     })
-  }, [activeName, indexed, refresh, retryNow, selectSession, selectView, updateView])
+  }, [activeName, commit, indexed, refresh, retryNow, selectSession, selectView, updateView])
 
   // ---------- render ----------
 
@@ -1398,6 +1408,7 @@ export default function App(): JSX.Element {
                 suppressed={overlayOpen}
                 zoom={view.zoom}
                 focusOnShow={!tiled}
+                fontSize={config.fontSize}
                 detachHidden={config.detachHidden}
                 settings={config.sessions[s.name] ?? defaultSession()}
                 showBookmarks={!tiled}
@@ -1796,6 +1807,7 @@ interface SessionPaneProps {
   zoom: number
   focusOnShow: boolean
   focused: boolean
+  fontSize: number
   detachHidden: boolean
   settings: SessionConfig
   terminals: Map<string, TerminalHandle | null>
@@ -1823,6 +1835,7 @@ function SessionPane({
   zoom,
   focusOnShow,
   focused,
+  fontSize,
   detachHidden,
   settings,
   terminals,
@@ -1925,6 +1938,7 @@ function SessionPane({
             ssh={ssh}
             active={visible}
             focusOnShow={focusOnShow}
+            fontSize={fontSize}
             detachWhenHidden={detachHidden}
             hasBrowser={showBrowser}
             onOpenUrl={openUrl}

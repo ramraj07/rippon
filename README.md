@@ -99,6 +99,10 @@ so a browser login done in either applies to both.
 | Opening a tab | `ssh -tt host tmux -u new-session -A -s <name>` |
 | Every 5s, on window focus, and on reconnect | `tmux list-sessions` |
 
+Selecting text copies it. With tmux mouse mode on, a drag is tmux's own selection, and tmux sends it
+to the clipboard over OSC 52 when you let go (`set-clipboard` must not be `off`); hold ⌥ to make a
+local selection instead.
+
 Closing a tab asks whether to kill the session:
 
 - **Close tab only** — detaches and hides the tab. The session and everything running in it keep
@@ -291,6 +295,8 @@ Extra flags are split on spaces, so key paths must be absolute and free of space
 | `⌘J` | focus the terminal |
 | `⌘F` | find in the pane you were last in — page text, or terminal scrollback |
 | `⌘G` / `⌘⇧G` | next / previous match |
+| `⌘+` / `⌘-` / `⌘0` | browser zoom for this view |
+| `⌥⌘=` / `⌥⌘-` / `⌥⌘0` | terminal text size, for every pane (saved per machine) |
 | `⌘R` | reload the browser pane |
 | `⌘⇧R` | reattach the session |
 | `⌘,` | SSH settings |

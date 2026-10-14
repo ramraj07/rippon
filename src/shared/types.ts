@@ -227,6 +227,15 @@ export interface View {
   zoom: number
 }
 
+export const FONT_SIZE_DEFAULT = 13
+export const FONT_SIZE_MIN = 8
+export const FONT_SIZE_MAX = 32
+
+export function clampFontSize(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return FONT_SIZE_DEFAULT
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(value)))
+}
+
 export const ZOOM_MIN = 0.3
 export const ZOOM_MAX = 2
 export const ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5]
@@ -266,6 +275,8 @@ export interface LocalConfig {
   version: typeof CONFIG_VERSION
   hosts: HostEntry[]
   activeHostId: string
+  /** Terminal text size, in px. Kept here because it suits the screen, not the host. */
+  fontSize: number
 }
 
 /**
@@ -281,6 +292,7 @@ export interface RipponConfig {
   version: typeof CONFIG_VERSION
   hosts: HostEntry[]
   activeHostId: string
+  fontSize: number
   detachHidden: boolean
   views: View[]
   activeViewId?: string
@@ -380,7 +392,12 @@ export function defaultProfile(): Profile {
 }
 
 export function defaultLocalConfig(): LocalConfig {
-  return { version: CONFIG_VERSION, hosts: [defaultHost('host-1')], activeHostId: 'host-1' }
+  return {
+    version: CONFIG_VERSION,
+    hosts: [defaultHost('host-1')],
+    activeHostId: 'host-1',
+    fontSize: FONT_SIZE_DEFAULT
+  }
 }
 
 export function defaultConfig(): RipponConfig {
@@ -393,6 +410,7 @@ export function mergeConfig(local: LocalConfig, profile: Profile): RipponConfig 
     version: CONFIG_VERSION,
     hosts: local.hosts,
     activeHostId: local.activeHostId,
+    fontSize: local.fontSize,
     detachHidden: profile.detachHidden,
     views: profile.views,
     activeViewId: profile.activeViewId,
@@ -404,7 +422,12 @@ export function mergeConfig(local: LocalConfig, profile: Profile): RipponConfig 
 /** Tear the merged config back into the local file and the remote profile. */
 export function splitConfig(cfg: RipponConfig): { local: LocalConfig; profile: Profile } {
   return {
-    local: { version: CONFIG_VERSION, hosts: cfg.hosts, activeHostId: cfg.activeHostId },
+    local: {
+      version: CONFIG_VERSION,
+      hosts: cfg.hosts,
+      activeHostId: cfg.activeHostId,
+      fontSize: cfg.fontSize
+    },
     profile: {
       version: CONFIG_VERSION,
       detachHidden: cfg.detachHidden,
@@ -666,7 +689,7 @@ export function normalizeLocalConfig(raw: unknown): LocalConfig {
       ? cfg.activeHostId
       : hosts[0].id
 
-  return { version: CONFIG_VERSION, hosts, activeHostId }
+  return { version: CONFIG_VERSION, hosts, activeHostId, fontSize: clampFontSize(cfg.fontSize) }
 }
 
 /** Coerce anything into the merged shape the renderer uses. */

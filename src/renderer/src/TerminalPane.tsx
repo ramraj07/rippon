@@ -26,6 +26,8 @@ interface Props {
   detachWhenHidden: boolean
   /** Steal keyboard focus when shown. Off in tiled views, where several panes appear at once. */
   focusOnShow: boolean
+  /** Text size in px, shared by every pane. */
+  fontSize: number
   hasBrowser: boolean
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
@@ -80,6 +82,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     active,
     detachWhenHidden,
     focusOnShow,
+    fontSize,
     hasBrowser,
     onOpenUrl,
     onRename,
@@ -110,6 +113,8 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   sshRef.current = ssh
   const onFocusRef = useRef(onFocus)
   onFocusRef.current = onFocus
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
 
   function attach(): void {
     const term = termRef.current
@@ -173,7 +178,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     const term = new Terminal({
       fontFamily:
         'SFMono-Regular, ui-monospace, Menlo, "JetBrains Mono", "Fira Code", Consolas, monospace',
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.2,
       cursorBlink: true,
       // Every open session holds its own buffer, so this is paid per pane.
@@ -235,6 +240,47 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
 
     const onDataDisposable = term.onData((data) => void window.rippon.pty.write(id, data))
 
+    /*
+     * With tmux mouse mode on, a drag is tmux's own copy-mode selection, and on
+     * release tmux hands the text to the outer terminal as OSC 52. xterm.js
+     * drops that sequence unless told otherwise, so the copy never reached the
+     * clipboard. Only writes are honoured: a `?` query would let the remote end
+     * read this Mac's clipboard.
+     */
+    const onClipboard = term.parser.registerOscHandler(52, (data) => {
+      const payload = data.slice(data.indexOf(';') + 1)
+      if (!payload || payload === '?') return true
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+        void window.rippon.clipboard.write(new TextDecoder().decode(bytes))
+      } catch {
+        // Not base64; nothing sensible to copy.
+      }
+      return true
+    })
+
+    /*
+     * Copy on select, for selections xterm makes itself (mouse mode off, or ⌥
+     * held). Keyed to a mouse gesture that began in this pane, so a find that
+     * highlights its match, or Select all from the menu, leaves the clipboard
+     * alone. Capture phase, because a forced selection stops the mousedown.
+     */
+    let pointerSelecting = false
+    const onPointerDown = (e: MouseEvent): void => {
+      if (e.button === 0) pointerSelecting = true
+    }
+    const onPointerUp = (): void => {
+      if (!pointerSelecting) return
+      pointerSelecting = false
+      // Let xterm finish the gesture (double-click word, drag end) first.
+      setTimeout(() => {
+        const text = term.getSelection()
+        if (text) void window.rippon.clipboard.write(text)
+      }, 0)
+    }
+    host.addEventListener('mousedown', onPointerDown, true)
+    window.addEventListener('mouseup', onPointerUp, true)
+
     const offData = window.rippon.pty.onData((ptyId, data) => {
       if (ptyId === id) term.write(data)
     })
@@ -268,6 +314,9 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       offData()
       offExit()
       onDataDisposable.dispose()
+      onClipboard.dispose()
+      host.removeEventListener('mousedown', onPointerDown, true)
+      window.removeEventListener('mouseup', onPointerUp, true)
       onResults.dispose()
       term.textarea?.removeEventListener('focus', onTermFocus)
       searchRef.current = null
@@ -299,6 +348,21 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       void window.rippon.pty.kill(id)
     }
   }, [id])
+
+  useEffect(() => {
+    const term = termRef.current
+    const fit = fitRef.current
+    if (!term || !fit || term.options.fontSize === fontSize) return
+    term.options.fontSize = fontSize
+    // A hidden pane has no size to fit to; it refits when it is shown.
+    if (!hostRef.current?.clientWidth) return
+    try {
+      fit.fit()
+      void window.rippon.pty.resize(id, term.cols, term.rows)
+    } catch {
+      /* ignore */
+    }
+  }, [fontSize, id])
 
   // Reattach on Enter after a detach.
   useEffect(() => {

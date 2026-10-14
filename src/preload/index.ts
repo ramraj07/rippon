@@ -163,6 +163,7 @@ const api = {
       'menu:close-tab',
       'menu:refresh',
       'menu:zoom',
+      'menu:font-size',
       'menu:settings',
       'menu:focus-address',
       'menu:focus-terminal',
