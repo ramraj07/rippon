@@ -172,7 +172,8 @@ const api = {
       'menu:select-tab-index',
       'menu:files',
       'menu:find',
-      'menu:find-step'
+      'menu:find-step',
+      'menu:copy'
     ]
     const offs = channels.map((c) => on<[unknown]>(c, (payload) => cb(c, payload)))
     return () => offs.forEach((off) => off())

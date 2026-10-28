@@ -206,7 +206,7 @@ export function ViewDialog({
           </div>
         </label>
         <label>
-          Browser zoom
+          Zoom
           <div className="radio-row">
             {ZOOM_STEPS.map((z) => (
               <button
@@ -220,8 +220,9 @@ export function ViewDialog({
             ))}
           </div>
           <small>
-            Applies to every browser pane in this view. Chromium keeps zoom per site, so panes
-            showing the same site cannot differ. ⌘+ / ⌘− / ⌘0 adjust the active view.
+            Scales the terminal font and every browser pane in this view. Chromium keeps zoom
+            per site, so panes showing the same site cannot differ. ⌘= / ⌘− / ⌘0 adjust the
+            active view.
           </small>
         </label>
 

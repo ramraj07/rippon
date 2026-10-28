@@ -8,7 +8,7 @@ import {
   type JSX,
   type PointerEvent as ReactPointerEvent
 } from 'react'
-import TerminalPane, { type TerminalHandle } from './TerminalPane'
+import TerminalPane, { copyFromPage, type TerminalHandle } from './TerminalPane'
 import BrowserPane, { type BrowserHandle } from './BrowserPane'
 import FileBrowser from './FileBrowser'
 import HostSettings from './HostSettings'
@@ -964,6 +964,8 @@ export default function App(): JSX.Element {
   useEffect(() => {
     return window.rippon.onMenu((action, payload) => {
       const name = activeName
+
+      if (action === 'menu:copy') return copyFromPage()
 
       /*
        * Nothing but the connection itself is available until the profile is in
@@ -1927,6 +1929,7 @@ function SessionPane({
             focusOnShow={focusOnShow}
             detachWhenHidden={detachHidden}
             hasBrowser={showBrowser}
+            zoom={zoom}
             onOpenUrl={openUrl}
             onRename={onRename}
             onOpenBrowser={() => onUpdate(name, { showBrowser: true })}
