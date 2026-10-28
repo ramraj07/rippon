@@ -13,6 +13,11 @@ import type { HostConfig } from '../shared/types'
  * skips ssh and runs tmux through a login shell, which is the same idea one hop
  * closer: whatever the user's terminal would do, we do.
  */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\r/g, '')
+}
+
 export class PtyManager extends EventEmitter {
   private sessions = new Map<string, pty.IPty>()
   private lastLogged = new Map<string, string>()
@@ -36,26 +41,59 @@ export class PtyManager extends EventEmitter {
   ): Promise<void> {
     this.kill(id)
 
-    const { file, args } = attachSpec(ssh, session)
-    const env = ssh.kind === 'local' ? await localEnv() : process.env
-    this.kill(id)
+    let proc: pty.IPty
+    try {
+      const { file, args } = attachSpec(ssh, session)
+      const env = ssh.kind === 'local' ? await localEnv() : process.env
+      this.kill(id)
 
-    const proc = pty.spawn(file, args, {
-      name: 'xterm-256color',
-      cols: Math.max(cols, 2),
-      rows: Math.max(rows, 2),
-      cwd: os.homedir(),
-      env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>
-    })
+      proc = pty.spawn(file, args, {
+        name: 'xterm-256color',
+        cols: Math.max(cols, 2),
+        rows: Math.max(rows, 2),
+        cwd: os.homedir(),
+        env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>
+      })
+    } catch (err) {
+      // Otherwise this vanishes into a voided promise and the pane just sits there.
+      const message = err instanceof Error ? err.message : String(err)
+      activity.add('pane', 'error', `attach ${session} failed`, { detail: message })
+      throw new Error(message)
+    }
 
     this.sessions.set(id, proc)
     activity.add('pane', 'info', `attach ${session}`)
-    proc.onData((data) => this.emit('data', id, data))
-    proc.onExit(({ exitCode }) => {
+    /*
+     * The last output, kept so a client that dies on its own can say why in the
+     * log — ssh explains a failure on the tty and nowhere else.
+     */
+    let tail = ''
+    proc.onData((data) => {
+      tail = (tail + data).slice(-2000)
+      // A killed client can still flush a last chunk after its replacement has
+      // started; that belongs to nobody now.
+      if (this.sessions.get(id) === proc) this.emit('data', id, data)
+    })
+    proc.onExit(({ exitCode, signal }) => {
+      /*
+       * kill() takes the entry out before the exit lands, so a reattach can
+       * already have put a new client under this id. Reporting the old one's
+       * exit then would drop the new client from the map and tell the pane it
+       * detached — which reset the screen tmux had just drawn, and left a blank
+       * tab wired to nothing.
+       */
+      const current = this.sessions.get(id)
+      if (current && current !== proc) return
       this.sessions.delete(id)
       // A pane the user closed exits 0 through kill() below; a non-zero code
       // here is ssh, the shell or tmux giving up on its own — worth a line.
-      activity.add('pane', exitCode ? 'warn' : 'info', `${session} detached (code ${exitCode})`)
+      const detail = exitCode ? stripAnsi(tail).trim().split('\n').slice(-15).join('\n') : undefined
+      activity.add(
+        'pane',
+        exitCode ? 'warn' : 'info',
+        `${session} detached (code ${exitCode}${signal ? `, signal ${signal}` : ''})`,
+        { detail }
+      )
       this.emit('exit', id, exitCode)
     })
   }

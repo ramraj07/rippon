@@ -10,6 +10,50 @@ import type { FindMatches, SessionInfo, HostConfig } from '@shared/types'
 
 const NO_MATCHES: FindMatches = { active: 0, total: 0 }
 
+const BASE_FONT_SIZE = 13
+
+/** How long an attach may stay silent before the pane says it is still waiting. */
+const SILENT_ATTACH_MS = 12_000
+
+/** Every mounted terminal, so ⌘C can find the one the selection is in. */
+const live = new Map<string, Terminal>()
+let lastFocused: string | null = null
+
+/**
+ * ⌘C, routed here from the menu. An xterm selection is drawn on a canvas, not
+ * held in the DOM, so the browser's own copy command cannot see it: the focused
+ * terminal goes first, then an ordinary text field or DOM selection, then the
+ * terminal that last had focus — a selection survives clicking a button.
+ */
+export function copyFromPage(): void {
+  const active = document.activeElement
+  for (const term of live.values()) {
+    if (term.textarea === active && term.hasSelection()) {
+      void window.rippon.clipboard.write(term.getSelection())
+      return
+    }
+  }
+  const isXterm = active instanceof HTMLElement && !!active.closest('.xterm')
+  const domSelection = window.getSelection()?.toString() ?? ''
+  const editable = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+  if (!isXterm && (domSelection || editable)) {
+    document.execCommand('copy')
+    return
+  }
+  const last = lastFocused ? live.get(lastFocused) : undefined
+  if (last?.hasSelection()) void window.rippon.clipboard.write(last.getSelection())
+}
+
+/** OSC 52 carries base64 of UTF-8 bytes; atob alone would mangle anything non-ASCII. */
+function decodeBase64(b64: string): string | null {
+  try {
+    const bin = atob(b64)
+    return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))
+  } catch {
+    return null
+  }
+}
+
 export interface TerminalHandle {
   focus(): void
   reattach(): void
@@ -27,6 +71,8 @@ interface Props {
   /** Steal keyboard focus when shown. Off in tiled views, where several panes appear at once. */
   focusOnShow: boolean
   hasBrowser: boolean
+  /** The view's zoom; scales the terminal font as it does the browser page. */
+  zoom: number
   /** Called when a link in the terminal is clicked — routed to the browser pane. */
   onOpenUrl(url: string): void
   onRename(): void
@@ -81,6 +127,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     detachWhenHidden,
     focusOnShow,
     hasBrowser,
+    zoom,
     onOpenUrl,
     onRename,
     onOpenBrowser,
@@ -102,6 +149,11 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
   const [status, setStatus] = useState<'idle' | 'attached' | 'detached'>('idle')
   /** Set when we drop the client on purpose, so the exit is not reported as a drop. */
   const backgroundDetach = useRef(false)
+  /** Bumped per attach, so a late timer or failure from an earlier one stays quiet. */
+  const attempt = useRef(0)
+  const gotOutput = useRef(false)
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
 
   // Keep the latest values reachable from the terminal, which is built once.
   const openUrlRef = useRef(onOpenUrl)
@@ -121,8 +173,38 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       // not laid out yet; the pty gets a sane default and we resize on the next fit
     }
     term.write(`\x1b[2m→ attaching to ${id}\x1b[0m\r\n`)
-    void window.rippon.pty.attach(id, sshRef.current, id, term.cols, term.rows)
+    const mine = ++attempt.current
+    gotOutput.current = false
     setStatus('attached')
+    window.rippon.pty.attach(id, sshRef.current, id, term.cols, term.rows).then(
+      () => {
+        /*
+         * ssh that hangs before it ever reaches tmux — a wedged master, a host
+         * that accepts the connection and then says nothing — prints nothing
+         * either, and the pane looks merely empty. Say so.
+         */
+        setTimeout(() => {
+          if (attempt.current !== mine || gotOutput.current) return
+          termRef.current?.write(
+            `\x1b[33m… no output from ${sshRef.current.kind === 'local' ? 'tmux' : 'ssh'} after ${
+              SILENT_ATTACH_MS / 1000
+            }s — still waiting. ⌘⇧R reattaches; the Activity log has the ssh side.\x1b[0m\r\n`
+          )
+        }, SILENT_ATTACH_MS)
+      },
+      (err: unknown) => {
+        if (attempt.current !== mine) return
+        // Electron prefixes the main-process error with its own wrapper text.
+        const message = String(err instanceof Error ? err.message : err).replace(
+          /^Error invoking remote method '[^']+': (Error: )?/,
+          ''
+        )
+        termRef.current?.write(
+          `\x1b[31m✗ attach failed: ${message}\x1b[0m\r\n\x1b[2m— Press Enter to retry. —\x1b[0m\r\n`
+        )
+        setStatus('detached')
+      }
+    )
   }
 
   function step(delta: 1 | -1): void {
@@ -173,7 +255,7 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     const term = new Terminal({
       fontFamily:
         'SFMono-Regular, ui-monospace, Menlo, "JetBrains Mono", "Fira Code", Consolas, monospace',
-      fontSize: 13,
+      fontSize: Math.round(BASE_FONT_SIZE * zoomRef.current),
       lineHeight: 1.2,
       cursorBlink: true,
       // Every open session holds its own buffer, so this is paid per pane.
@@ -207,8 +289,20 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     try {
       webgl = new WebglAddon()
       webgl.onContextLoss(() => {
-        webgl?.dispose()
+        /*
+         * Chromium caps live WebGL contexts (16) and drops the oldest past that,
+         * so with enough tabs open this fires. Disposing falls back to the DOM
+         * renderer, but nothing repaints until output arrives — a quiet session
+         * then shows as a blank tab. Repaint now.
+         */
+        console.warn(`[rippon] WebGL context lost for ${id}; falling back to DOM renderer`)
+        try {
+          webgl?.dispose()
+        } catch {
+          // already half torn down by the loss
+        }
         webgl = null
+        term.refresh(0, term.rows - 1)
       })
       term.loadAddon(webgl)
     } catch (err) {
@@ -220,13 +314,30 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     termRef.current = term
     fitRef.current = fit
     searchRef.current = search
+    live.set(id, term)
+
+    /*
+     * OSC 52: how tmux (with `mouse on`) and remote editors put a copy on the
+     * local clipboard. xterm.js ignores it unless told, so a mouse-mode drag
+     * landed only in tmux's own buffer on the far end. Reads ("?") are refused.
+     */
+    const onOsc52 = term.parser.registerOscHandler(52, (data) => {
+      const payload = data.slice(data.indexOf(';') + 1)
+      if (!payload || payload === '?') return true
+      const text = decodeBase64(payload)
+      if (text !== null) void window.rippon.clipboard.write(text)
+      return true
+    })
 
     // resultIndex is -1 when nothing matched; the bar counts from 1.
     const onResults = search.onDidChangeResults(({ resultIndex, resultCount }) =>
       setMatches({ active: resultIndex + 1, total: resultCount })
     )
     // xterm's real keyboard target is the hidden textarea, not the host div.
-    const onTermFocus = (): void => onFocusRef.current()
+    const onTermFocus = (): void => {
+      lastFocused = id
+      onFocusRef.current()
+    }
     term.textarea?.addEventListener('focus', onTermFocus)
     // Debug handle: lets the main process inspect selection state. See
     // RIPPON_DEBUG_SELECT in src/main/index.ts.
@@ -236,10 +347,13 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
     const onDataDisposable = term.onData((data) => void window.rippon.pty.write(id, data))
 
     const offData = window.rippon.pty.onData((ptyId, data) => {
-      if (ptyId === id) term.write(data)
-    })
-    const offExit = window.rippon.pty.onExit((ptyId) => {
       if (ptyId !== id) return
+      gotOutput.current = true
+      term.write(data)
+    })
+    const offExit = window.rippon.pty.onExit((ptyId, code) => {
+      if (ptyId !== id) return
+      attempt.current++
       if (backgroundDetach.current) {
         // We asked for this. Clear the stale screen so the next attach starts
         // from tmux's own redraw rather than on top of an old frame.
@@ -249,7 +363,13 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
         return
       }
       setStatus('detached')
-      term.write('\r\n\x1b[2m— detached. Press Enter to reattach. —\x1b[0m\r\n')
+      term.write(
+        code
+          ? `\r\n\x1b[31m— exited with code ${code}${
+              gotOutput.current ? '' : ' before printing anything'
+            }. Press Enter to reattach. —\x1b[0m\r\n`
+          : '\r\n\x1b[2m— detached. Press Enter to reattach. —\x1b[0m\r\n'
+      )
     })
 
     const observer = new ResizeObserver(() => {
@@ -269,6 +389,9 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       offExit()
       onDataDisposable.dispose()
       onResults.dispose()
+      onOsc52.dispose()
+      live.delete(id)
+      if (lastFocused === id) lastFocused = null
       term.textarea?.removeEventListener('focus', onTermFocus)
       searchRef.current = null
       /*
@@ -299,6 +422,21 @@ const TerminalPane = forwardRef<TerminalHandle, Props>(function TerminalPane(
       void window.rippon.pty.kill(id)
     }
   }, [id])
+
+  // Zoom changes the cell size, so the grid — and tmux's idea of it — follows.
+  useEffect(() => {
+    const term = termRef.current
+    const size = Math.round(BASE_FONT_SIZE * zoom)
+    if (!term || term.options.fontSize === size) return
+    term.options.fontSize = size
+    if (!hostRef.current?.clientWidth) return
+    try {
+      fitRef.current?.fit()
+      void window.rippon.pty.resize(id, term.cols, term.rows)
+    } catch {
+      /* mid-teardown */
+    }
+  }, [zoom, id])
 
   // Reattach on Enter after a detach.
   useEffect(() => {
