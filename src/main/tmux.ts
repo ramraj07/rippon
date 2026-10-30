@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { activity } from './activity'
-import { attachCommand, runLocal } from './local'
+import { attachCommand, attachTmux, runLocal } from './local'
 import {
   hostConfigured,
   SESSION_NAME_RE,
@@ -87,7 +87,7 @@ export function attachSpec(host: HostConfig, session: string): { file: string; a
   if (host.kind === 'local') return attachCommand(session)
   return {
     file: 'ssh',
-    args: ['-tt', ...controlArgs(), ...host.args, host.host, `tmux -u new-session -A -s ${session}`]
+    args: ['-tt', ...controlArgs(), ...host.args, host.host, attachTmux(session)]
   }
 }
 

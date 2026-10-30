@@ -8,6 +8,7 @@ import {
   powerMonitor,
   session,
   shell,
+  webContents,
   type MenuItemConstructorOptions,
   type Rectangle
 } from 'electron'
@@ -366,7 +367,21 @@ function buildMenu(): void {
         { role: 'redo' },
         { type: 'separator' },
         { role: 'cut' },
-        { role: 'copy' },
+        {
+          /*
+           * Not `role: 'copy'`: that runs the DOM copy command, and an xterm
+           * selection is not a DOM selection — so ⌘C in a terminal copied
+           * nothing unless xterm's hidden textarea happened to hold focus. The
+           * page decides; a browser view keeps the native copy.
+           */
+          label: 'Copy',
+          accelerator: 'CmdOrCtrl+C',
+          click: () => {
+            const focused = webContents.getFocusedWebContents()
+            if (focused && mainWindow && focused !== mainWindow.webContents) focused.copy()
+            else send('menu:copy')
+          }
+        },
         { role: 'paste' },
         { role: 'selectAll' },
         { type: 'separator' },
@@ -411,6 +426,14 @@ function buildMenu(): void {
         {
           label: 'Zoom In (this view)',
           accelerator: 'CmdOrCtrl+Plus',
+          click: () => send('menu:zoom', 1)
+        },
+        {
+          // `Plus` needs Shift on most layouts; this is the ⌘= everyone presses.
+          label: 'Zoom In (this view)',
+          accelerator: 'CmdOrCtrl+=',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
           click: () => send('menu:zoom', 1)
         },
         {

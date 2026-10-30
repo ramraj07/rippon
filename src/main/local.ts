@@ -143,8 +143,22 @@ export async function runLocal(
  * it should start in the environment their terminal would — and `tmux` has to be
  * findable by name for the `-c` command to work at all.
  */
+/**
+ * Attach (or create), then let programs in the pane set the clipboard.
+ *
+ * tmux's default `set-clipboard external` only forwards its own copy-mode
+ * copies; an OSC 52 from an app inside the pane — which is how Claude Code and
+ * remote editors copy — is swallowed, so their copies never left the host.
+ * `on` passes them through to xterm, where TerminalPane writes the clipboard.
+ * Chained after the attach so it also lands on a server this attach just
+ * started. A server-wide option, so it holds for every client of that server.
+ */
+export function attachTmux(session: string): string {
+  return `tmux -u new-session -A -s ${session} \\; set -s set-clipboard on`
+}
+
 export function attachCommand(session: string): { file: string; args: string[] } {
-  return { file: loginShell(), args: ['-l', '-c', `tmux -u new-session -A -s ${session}`] }
+  return { file: loginShell(), args: ['-l', '-c', attachTmux(session)] }
 }
 
 // ---------- the file browser, without a shell ----------
