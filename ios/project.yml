@@ -57,6 +57,9 @@ targets:
         CFBundleDisplayName: Rippon
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Overwritten at build time by the "Stamp build info" script below.
+        RipponCommit: unknown
+        RipponBuiltAt: unknown
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -75,8 +78,21 @@ targets:
           # http:// links to dev servers; the in-app browser has to load both.
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoadsInWebContent: true
+    postBuildScripts:
+      # Shown in Settings, so it is plain which commit is on the phone. Runs
+      # before Xcode signs the app, so the edited Info.plist is what gets signed.
+      - name: Stamp build info
+        basedOnDependencyAnalysis: false
+        script: |
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          sha=$(git -C "$SRCROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+          if [ -n "$(git -C "$SRCROOT" status --porcelain -- . 2>/dev/null | head -1)" ]; then sha="$sha+changes"; fi
+          when=$(date "+%Y-%m-%d %H:%M")
+          /usr/libexec/PlistBuddy -c "Set :RipponCommit $sha" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :RipponBuiltAt $when" "$plist"
     settings:
       base:
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         PRODUCT_BUNDLE_IDENTIFIER: dev.rippon.Rippon
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1

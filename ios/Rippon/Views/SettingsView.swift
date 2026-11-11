@@ -33,6 +33,11 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("This build") {
+                LabeledContent("Commit", value: Bundle.main.object(forInfoDictionaryKey: "RipponCommit") as? String ?? "unknown")
+                    .font(.callout.monospaced())
+                LabeledContent("Built", value: Bundle.main.object(forInfoDictionaryKey: "RipponBuiltAt") as? String ?? "unknown")
+            }
             Section {
                 Text("Layouts, per-session pages and bookmarks are stored on the host in ~/.rippon/profiles, so the desktop app and this iPhone share them. Tiled and multi-view layouts from the desktop are kept as they are.")
                     .font(.footnote).foregroundStyle(.secondary)

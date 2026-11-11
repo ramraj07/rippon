@@ -50,7 +50,7 @@ struct SessionListView: View {
                             }
                     }
                 } footer: {
-                    Text("Swipee to hide a session (it keeps running) or kill it.")
+                    Text("Swipe to hide a session (it keeps running) or kill it.")
                 }
             }
             if !workspace.hiddenSessions.isEmpty {
