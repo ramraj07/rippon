@@ -33,7 +33,9 @@ struct SessionListView: View {
             } else {
                 Section {
                     ForEach(workspace.visibleSessions) { s in
-                        NavigationLink(value: s.name) { SessionRow(session: s) }
+                        NavigationLink(value: s.name) {
+                            SessionRow(session: s, preview: workspace.showPreviews ? workspace.previews[s.name] ?? "" : nil)
+                        }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) { killing = s.name } label: { Label("Kill", systemImage: "xmark.octagon") }
                                 if workspace.profile?.canHide == true {
@@ -78,6 +80,10 @@ struct SessionListView: View {
                     .accessibilityLabel("New session")
                     .keyboardShortcut("t", modifiers: .command)
                 Menu {
+                    Button { workspace.showPreviews.toggle() } label: {
+                        Label(workspace.showPreviews ? "Hide previews" : "Show previews",
+                              systemImage: workspace.showPreviews ? "rectangle.slash" : "rectangle.inset.filled")
+                    }
                     Button { sheet = .files } label: { Label("Browse files", systemImage: "folder") }
                     if let on = workspace.mouseMode {
                         Button { Task { await workspace.toggleMouseMode() } } label: {
@@ -142,8 +148,17 @@ struct Ident: Identifiable { let id: String }
 
 struct SessionRow: View {
     let session: SessionInfo
+    /// The session's screen as text; nil when previews are off.
+    var preview: String? = nil
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            if let preview { ScreenPreview(text: preview) }
+        }
+    }
+
+    private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "terminal")
                 .foregroundStyle(session.attached ? Color.green : Color.secondary)
@@ -161,6 +176,30 @@ struct SessionRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// A session's screen in a very small font: the bottom of it, where the
+/// prompt and the latest output are, cut off on the right like a thumbnail.
+struct ScreenPreview: View {
+    let text: String
+    static let lines = 14
+    static let size: CGFloat = 5.5
+
+    var body: some View {
+        let tail = text.split(separator: "\n", omittingEmptySubsequences: false).suffix(Self.lines).joined(separator: "\n")
+        Text(tail.isEmpty ? " " : tail)
+            .font(.system(size: Self.size, design: .monospaced))
+            .foregroundStyle(Color(white: 0.85))
+            .lineLimit(Self.lines)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: .infinity, minHeight: Self.size * 1.25 * CGFloat(Self.lines),
+                   maxHeight: Self.size * 1.25 * CGFloat(Self.lines), alignment: .bottomLeading)
+            .padding(6)
+            .clipped()
+            .background(Color(red: 0.06, green: 0.07, blue: 0.10), in: RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .accessibilityHidden(true)
     }
 }
 

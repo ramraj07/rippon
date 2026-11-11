@@ -25,6 +25,14 @@ final class Workspace: ObservableObject {
     @Published private(set) var profiles: [String] = []
     @Published private(set) var sessions: [SessionInfo] = []
     @Published private(set) var mouseMode: Bool?
+    /// Each session's screen as text, while previews are on.
+    @Published private(set) var previews: [String: String] = [:]
+    @Published var showPreviews = UserDefaults.standard.bool(forKey: "showPreviews") {
+        didSet {
+            UserDefaults.standard.set(showPreviews, forKey: "showPreviews")
+            if showPreviews { Task { await refreshPreviews() } } else { previews = [:] }
+        }
+    }
     @Published private(set) var forwards = PortForwarder.Status()
     /// Set while connected and the link drops; the workspace stays on screen.
     @Published private(set) var linkDown: String?
@@ -237,6 +245,13 @@ final class Workspace: ObservableObject {
         } catch {
             banner = "Could not list sessions: \(describe(error))"
         }
+        await refreshPreviews()
+    }
+
+    /// Only while previews are on and the session list is what's on screen.
+    private func refreshPreviews() async {
+        guard showPreviews, navPath.isEmpty, let c = connection else { return }
+        if let p = try? await Tmux.previews(c, names: visibleSessions.map(\.name)) { previews = p }
     }
 
     var visibleSessions: [SessionInfo] {
