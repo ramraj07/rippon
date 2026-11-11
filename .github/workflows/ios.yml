@@ -21,6 +21,12 @@ jobs:
         working-directory: ios
     steps:
       - uses: actions/checkout@v4
+      # The Liquid Glass app icon (Rippon/AppIcon.icon) needs Xcode 26.
+      - name: Select Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate the Xcode project
@@ -42,6 +48,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee build.log | grep -E '(error|warning: unre|BUILD)' || true
           grep -q 'BUILD SUCCEEDED' build.log
+      # Liquid Glass renders of the icon in every appearance, as a build artifact.
+      - name: Render the app icon
+        run: |
+          ictool="$(xcode-select -p)/../Applications/Icon Composer.app/Contents/Executables/ictool"
+          mkdir -p icon-preview
+          for look in Light Dark TintedLight TintedDark ClearLight ClearDark; do
+            "$ictool" Rippon/AppIcon.icon --export-preview iOS $look 1024 1024 1 "icon-preview/$look.png"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: icon-preview
+          path: ios/icon-preview/*.png
+          if-no-files-found: ignore
       - name: Show errors
         if: failure()
         run: grep -n -B2 -A6 'error:' build.log | head -300 || true
