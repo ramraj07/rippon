@@ -101,3 +101,8 @@ ios/
     Browser/             WKWebView per session
     Views/               SwiftUI screens
 ```
+
+## Publishing
+
+The App Store listing, review notes, privacy answers and screenshot plan are in
+[`AppStore/`](AppStore/README.md).
