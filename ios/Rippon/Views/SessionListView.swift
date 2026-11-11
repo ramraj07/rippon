@@ -188,17 +188,22 @@ struct ScreenPreview: View {
 
     var body: some View {
         let tail = text.split(separator: "\n", omittingEmptySubsequences: false).suffix(Self.lines).joined(separator: "\n")
-        Text(tail.isEmpty ? " " : tail)
-            .font(.system(size: Self.size, design: .monospaced))
-            .foregroundStyle(Color(white: 0.85))
-            .lineLimit(Self.lines)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(maxWidth: .infinity, minHeight: Self.size * 1.25 * CGFloat(Self.lines),
-                   maxHeight: Self.size * 1.25 * CGFloat(Self.lines), alignment: .bottomLeading)
-            .padding(6)
+        let height = Self.size * 1.25 * CGFloat(Self.lines)
+        // The text sits in an overlay so its natural width (a wide pane can be
+        // 200+ columns) never sizes the row: the box takes the row's width and
+        // the rest is cut off on the right, unwrapped.
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+            .overlay(alignment: .bottomLeading) {
+                Text(tail.isEmpty ? " " : tail)
+                    .font(.system(size: Self.size, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.85))
+                    .lineLimit(Self.lines)
+                    .fixedSize()
+            }
             .clipped()
+            .padding(6)
             .background(Color(red: 0.06, green: 0.07, blue: 0.10), in: RoundedRectangle(cornerRadius: 6))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
             .accessibilityHidden(true)
     }
 }
