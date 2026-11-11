@@ -65,3 +65,18 @@ jobs:
       - name: Show errors
         if: failure()
         run: grep -n -B2 -A6 'error:' build.log | head -300 || true
+
+  concepts:
+    name: Render icon concepts
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          ictool="$xcode/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"
+          cd ios/icon-concepts; mkdir -p r
+          for d in *.icon; do for look in Light Dark TintedDark; do
+            "$ictool" "$d" --export-preview iOS $look 1024 1024 1 "r/${d%.icon}-$look.png"
+            sips -Z 400 "r/${d%.icon}-$look.png" >/dev/null
+            echo "BEGIN-PNG r/${d%.icon}-$look.png"; base64 -i "r/${d%.icon}-$look.png" | fold -w 4000; echo "END-PNG"
+          done; done
