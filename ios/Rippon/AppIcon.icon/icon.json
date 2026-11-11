@@ -1,0 +1,122 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.25098,0.43922,0.85882,1.00000",
+          "srgb:0.07843,0.12549,0.29020,1.00000"
+        ],
+        "orientation" : {
+          "start" : { "x" : 0.5, "y" : 0 },
+          "stop" : { "x" : 0.5, "y" : 1 }
+        }
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.11765,0.15686,0.27451,1.00000",
+          "srgb:0.01961,0.02745,0.05490,1.00000"
+        ],
+        "orientation" : {
+          "start" : { "x" : 0.5, "y" : 0 },
+          "stop" : { "x" : 0.5, "y" : 1 }
+        }
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "name" : "Clock",
+      "layers" : [
+        {
+          "name" : "3-clock-hands",
+          "image-name" : "3-clock-hands.svg",
+          "glass" : true,
+          "fill-specializations" : [
+            {
+              "value" : { "solid" : "srgb:1.00000,1.00000,1.00000,1.00000" }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : { "solid" : "extended-gray:1.00000,1.00000" }
+            }
+          ]
+        },
+        {
+          "name" : "2-clock-face",
+          "image-name" : "2-clock-face.svg",
+          "glass" : true,
+          "fill-specializations" : [
+            {
+              "value" : { "solid" : "srgb:1.00000,0.69804,0.21961,1.00000" }
+            },
+            {
+              "appearance" : "dark",
+              "value" : { "solid" : "srgb:1.00000,0.74118,0.30196,1.00000" }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : { "solid" : "extended-gray:0.45000,1.00000" }
+            }
+          ]
+        }
+      ],
+      "lighting" : "combined",
+      "position" : {
+        "scale" : 0.86,
+        "translation-in-points" : [ 0, 0 ]
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    },
+    {
+      "name" : "Building",
+      "layers" : [
+        {
+          "name" : "1-building",
+          "image-name" : "1-building.svg",
+          "glass" : true,
+          "fill-specializations" : [
+            {
+              "value" : { "solid" : "srgb:1.00000,1.00000,1.00000,1.00000" }
+            },
+            {
+              "appearance" : "dark",
+              "value" : { "solid" : "srgb:0.84706,0.87843,0.94902,1.00000" }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : { "solid" : "extended-gray:1.00000,1.00000" }
+            }
+          ]
+        }
+      ],
+      "lighting" : "combined",
+      "position" : {
+        "scale" : 0.86,
+        "translation-in-points" : [ 0, 0 ]
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.35
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
