@@ -160,6 +160,7 @@ final class TerminalController: NSObject, ObservableObject {
             return
         }
         scroller?.stopMomentum()
+        scroller?.clearSelection()
         if heldKeys != nil {
             heldKeys! += bytes
             return
