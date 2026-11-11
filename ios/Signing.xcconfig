@@ -1,0 +1,4 @@
+// Pulls in your own signing settings, if you have made them. Create
+// Local.xcconfig next to this file (it is git-ignored) with, for example:
+//   DEVELOPMENT_TEAM = ABCDE12345
+#include? "Local.xcconfig"

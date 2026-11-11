@@ -3,3 +3,4 @@ Rippon/Info.plist
 build/
 DerivedData/
 *.xcuserstate
+Local.xcconfig

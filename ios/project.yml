@@ -31,9 +31,13 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    # Set this to your own team (Xcode → Signing & Capabilities) to run on a device.
-    DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
+
+# Your signing team goes in ios/Local.xcconfig (not checked in), so it survives
+# `xcodegen generate`:  echo 'DEVELOPMENT_TEAM = <your team id>' > Local.xcconfig
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
 
 targets:
   Rippon:

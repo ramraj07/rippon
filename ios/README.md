@@ -15,9 +15,16 @@ xcodegen generate
 open Rippon.xcodeproj
 ```
 
-To run it on your phone, open the Rippon target's **Signing & Capabilities**, pick your team (a
-free Apple ID works for your own device), and change the bundle identifier if Xcode asks for one
-that is unique to you. Then choose your iPhone as the run destination and press ⌘R.
+To run it on your phone, put your signing team in `ios/Local.xcconfig` once. The file is
+git-ignored, and it survives `xcodegen generate`, unlike a team picked in Xcode:
+
+```bash
+echo 'DEVELOPMENT_TEAM = <your team id>' > Local.xcconfig
+```
+
+Your team ID is shown in Xcode → Settings → Accounts, or at developer.apple.com → Membership. Then
+choose your iPhone as the run destination and press ⌘R. **Pull before you build**: Xcode builds
+whatever is in this folder. Settings → This build in the app shows the commit it was built from.
 
 `project.yml` is the source of truth. The generated `Rippon.xcodeproj` is not checked in, so
 regenerate it after pulling. The `iOS` GitHub workflow builds the app for the simulator on every
