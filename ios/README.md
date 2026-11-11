@@ -38,6 +38,7 @@ change under `ios/`.
 | File browser | **⋯ → Browse files**: text and image previews, and download to the share sheet |
 | `⇱` mouse-mode chip | **⋯ → Turn tmux mouse on/off** |
 | SSH activity | **⋯ → SSH activity** |
+| Scroll wheel / trackpad in the terminal | One-finger drag scrolls tmux's history (flick to keep going). Press and hold a moment, then drag, to select instead. Typing jumps back to the bottom |
 | Terminal text size | **⋯ → Text size** in a session, or Settings |
 
 ### Different on iPhone
