@@ -101,14 +101,18 @@ final class TerminalScroller: NSObject, UIGestureRecognizerDelegate {
     // MARK: Selecting
 
     /// The size of one cell, worked out the way SwiftTerm does.
-    private var cellSize: CGSize {
-        guard let view else { return CGSize(width: 8, height: 16) }
+    static func cellSize(of view: TerminalView) -> CGSize {
         let font = view.font
         let scale = view.window?.screen.scale ?? UIScreen.main.scale
         let w = "W".size(withAttributes: [.font: font]).width
         let h = font.ascender - font.descender + font.leading
         return CGSize(width: max(1, (w * scale).rounded() / scale),
                       height: max(1, ceil(ceil(h) * scale) / scale))
+    }
+
+    private var cellSize: CGSize {
+        guard let view else { return CGSize(width: 8, height: 16) }
+        return Self.cellSize(of: view)
     }
 
     /// The buffer cell under a point in the view's content coordinates.

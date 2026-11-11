@@ -47,6 +47,7 @@ change under `ios/`.
 | SSH activity | **⋯ → SSH activity** |
 | Scroll wheel / trackpad in the terminal | One-finger drag scrolls tmux's history (flick to keep going). Typing jumps back to the bottom |
 | Selecting text | Press and hold (the word under your finger is picked), keep holding and drag to stretch it, let go for Copy. Drag either end to adjust it; tap anywhere to clear |
+| Clickable links | Web links on screen are underlined in blue (long ones that wrap included); tap one and it opens in that session's browser |
 | tmux prefix keys | The green **tmux** key on the keyboard bar: new/next/previous/pick window, rename, splits, next pane, zoom, copy mode, detach, close. Runs tmux commands directly, so any prefix works |
 | Keyboard bar | Settings → Keyboard bar: reorder or remove keys, add PgUp/PgDn/Home/End/symbols, and add snippets (keys that type text, optionally pressing Return) |
 | Terminal text size | **⋯ → Text size** in a session, or Settings |

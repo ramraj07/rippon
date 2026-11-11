@@ -51,6 +51,8 @@ struct SessionView: View {
             if target == name {
                 pane = .browser
                 workspace.showBrowserFor = nil
+                // The tap that opened the link may also have raised the keyboard.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { _ = terminal.view.resignFirstResponder() }
             }
         }
     }
