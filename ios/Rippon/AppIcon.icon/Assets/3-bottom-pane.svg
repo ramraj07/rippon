@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- split pane, bottom right; overlaps the top one -->
+  <path fill="#ffffff" d="M602 484H742A110 110 0 0 1 852 594V718A110 110 0 0 1 742 828H602A110 110 0 0 1 492 718V594A110 110 0 0 1 602 484Z"/>
+</svg>
