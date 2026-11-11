@@ -11,6 +11,7 @@ struct SettingsView: View {
                 Stepper(value: Binding(get: { hosts.fontSize }, set: { workspace.setFontSize($0) }), in: 8...32, step: 1) {
                     Text("Text size: \(Int(hosts.fontSize)) pt")
                 }
+                NavigationLink { KeyBarSettingsView() } label: { Label("Keyboard bar", systemImage: "keyboard") }
             }
             Section {
                 NavigationLink { HostsView() } label: { Label("Hosts", systemImage: "server.rack") }

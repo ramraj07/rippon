@@ -60,6 +60,25 @@ final class TerminalController: NSObject, ObservableObject {
         scroller = TerminalScroller(view: view) { [weak self] lines, point in
             self?.scroll(lines: lines, at: point)
         }
+        let bar = KeyBar(controller: self)
+        keyBar = bar
+        view.inputAccessoryView = bar
+    }
+
+    private weak var keyBar: KeyBar?
+
+    /// Run a tmux command against this session; `{s}` stands for its exact
+    /// target. Fire and forget: tmux redraws the pane itself.
+    func tmux(_ command: String) {
+        Task { _ = await tmuxOutput(command) }
+    }
+
+    /// The same, returning what it printed, or nil if it failed.
+    func tmuxOutput(_ command: String) async -> String? {
+        guard let c = connection else { return nil }
+        let line = "tmux " + command.replacingOccurrences(of: "{s}", with: "=\(session)")
+        // `run` logs failures to SSH activity.
+        return try? await c.run(line, source: "tmux", label: String(command.prefix(40)))
     }
 
     func setFontSize(_ size: CGFloat) {
@@ -161,6 +180,7 @@ final class TerminalController: NSObject, ObservableObject {
         }
         scroller?.stopMomentum()
         scroller?.clearSelection()
+        defer { keyBar?.refresh() }
         if heldKeys != nil {
             heldKeys! += bytes
             return
