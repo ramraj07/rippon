@@ -117,7 +117,7 @@ final class TerminalScroller: NSObject, UIGestureRecognizerDelegate {
         let term = view.getTerminal()
         let size = cellSize
         let col = min(max(0, Int(p.x / size.width)), term.cols - 1)
-        let row = min(max(0, Int(p.y / size.height)), max(0, term.displayBuffer.lines.count - 1))
+        let row = min(max(0, Int(p.y / size.height)), max(0, term.buffer.yDisp + term.rows - 1))
         return Position(col: col, row: row)
     }
 
@@ -136,7 +136,7 @@ final class TerminalScroller: NSObject, UIGestureRecognizerDelegate {
             let c = cell(at: p)
             anchor = c
             anchorPoint = p
-            view.selection.selectWordOrExpression(at: c, in: view.getTerminal().displayBuffer)
+            view.selection.selectWordOrExpression(at: c, in: view.getTerminal().buffer)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .changed:
             guard let a = anchor else { return }
