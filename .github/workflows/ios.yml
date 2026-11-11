@@ -74,8 +74,8 @@ jobs:
       - run: |
           xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
           ictool="$xcode/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"
-          cd ios/icon-concepts; mkdir -p r
-          for d in *.icon; do for look in Light Dark TintedDark; do
+          cd ios/Rippon; mkdir -p r
+          for d in AppIcon.icon; do for look in Light Dark TintedLight TintedDark ClearLight ClearDark; do
             "$ictool" "$d" --export-preview iOS $look 1024 1024 1 "r/${d%.icon}-$look.png"
             sips -Z 400 "r/${d%.icon}-$look.png" >/dev/null
             echo "BEGIN-PNG r/${d%.icon}-$look.png"; base64 -i "r/${d%.icon}-$look.png" | fold -w 4000; echo "END-PNG"
