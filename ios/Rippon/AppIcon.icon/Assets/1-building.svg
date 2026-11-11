@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Ripon Building silhouette. Openings are holes (even-odd), so the
+       background shows through them; the glass gives them depth. -->
+  <g fill="#ffffff" fill-rule="evenodd">
+    <rect x="506" y="126" width="12" height="50" rx="6"/>
+    <circle cx="512" cy="188" r="17"/>
+    <path d="M512 206c46 0 78 34 78 76H434c0-42 32-76 78-76z"/>
+    <rect x="420" y="281" width="184" height="28" rx="8"/>
+    <rect x="448" y="307" width="128" height="166"/>
+    <!-- upper storey, with the tower louvre and four windows -->
+    <path d="M286 470H738V608H286Z
+             M482 512a30 30 0 0 1 60 0v26a30 30 0 0 1-60 0Z
+             M318 527a21 21 0 0 1 42 0v44a21 21 0 0 1-42 0Z
+             M388 527a21 21 0 0 1 42 0v44a21 21 0 0 1-42 0Z
+             M594 527a21 21 0 0 1 42 0v44a21 21 0 0 1-42 0Z
+             M664 527a21 21 0 0 1 42 0v44a21 21 0 0 1-42 0Z"/>
+    <rect x="268" y="606" width="488" height="28" rx="8"/>
+    <!-- arcaded wings and the central entrance -->
+    <path d="M140 632H884V826H140Z
+             M176 800V722a26 26 0 0 1 52 0v78Z
+             M247 800V722a26 26 0 0 1 52 0v78Z
+             M318 800V722a26 26 0 0 1 52 0v78Z
+             M389 800V722a26 26 0 0 1 52 0v78Z
+             M583 800V722a26 26 0 0 1 52 0v78Z
+             M654 800V722a26 26 0 0 1 52 0v78Z
+             M725 800V722a26 26 0 0 1 52 0v78Z
+             M796 800V722a26 26 0 0 1 52 0v78Z
+             M470 800V706a42 42 0 0 1 84 0v94Z"/>
+    <rect x="122" y="824" width="780" height="30" rx="6"/>
+    <rect x="100" y="852" width="824" height="30" rx="7"/>
+  </g>
+</svg>

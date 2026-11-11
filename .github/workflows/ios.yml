@@ -1,0 +1,67 @@
+name: iOS
+
+on:
+  push:
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build for the simulator
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      # The Liquid Glass app icon (Rippon/AppIcon.icon) needs Xcode 26.
+      - name: Select Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        run: xcodegen generate
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: spm-${{ hashFiles('ios/project.yml') }}
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild build \
+            -project Rippon.xcodeproj \
+            -scheme Rippon \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build.log | grep -E '(error|warning: unre|BUILD)' || true
+          grep -q 'BUILD SUCCEEDED' build.log
+      # Liquid Glass renders of the icon in every appearance, as a build artifact.
+      - name: Render the app icon
+        run: |
+          ictool="$(xcode-select -p)/../Applications/Icon Composer.app/Contents/Executables/ictool"
+          mkdir -p icon-preview
+          for look in Light Dark TintedLight TintedDark ClearLight ClearDark; do
+            "$ictool" Rippon/AppIcon.icon --export-preview iOS $look 1024 1024 1 "icon-preview/$look.png"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: icon-preview
+          path: ios/icon-preview/*.png
+          if-no-files-found: ignore
+      - name: Show errors
+        if: failure()
+        run: grep -n -B2 -A6 'error:' build.log | head -300 || true
