@@ -17,6 +17,11 @@ Each tab is a split pane:
 Click any link the agent prints and it loads in that tab's browser pane instead of your system
 browser. Plain URLs and OSC 8 hyperlinks both work.
 
+## iPhone
+
+There is a native iPhone app in [`ios/`](ios/README.md). It shares the same hosts' profiles, so
+the phone and the desktop show the same workspace.
+
 ## Running it
 
 ```bash
