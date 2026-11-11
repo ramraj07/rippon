@@ -48,22 +48,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee build.log | grep -E '(error|warning: unre|BUILD)' || true
           grep -q 'BUILD SUCCEEDED' build.log
+      # Liquid Glass renders of the icon in every appearance, as a build artifact.
       - name: Render the app icon
-        if: always()
         run: |
           ictool="$(xcode-select -p)/../Applications/Icon Composer.app/Contents/Executables/ictool"
           mkdir -p icon-preview
-          "$ictool" --help 2>&1 | head -60 || true
           for look in Light Dark TintedLight TintedDark ClearLight ClearDark; do
-            "$ictool" Rippon/AppIcon.icon --export-preview iOS $look 1024 1024 1 "icon-preview/$look.png" || echo "no $look"
-          done
-          ls -la icon-preview
-          app=$(find ~/Library/Developer/Xcode/DerivedData -name Rippon.app -path '*iphonesimulator*' | head -1)
-          xcrun assetutil --info "$app/Assets.car" | grep -E '"(Name|AssetType|Appearance|PixelHeight)"' | sort | uniq -c | head -40 || true
-          plutil -p "$app/Info.plist" | grep -A8 -i icon || true
-          for f in icon-preview/*.png; do
-            sips -Z 512 "$f" --out "$f.small.png" >/dev/null
-            echo "BEGIN-PNG $f"; base64 -i "$f.small.png" | fold -w 4000; echo "END-PNG"
+            "$ictool" Rippon/AppIcon.icon --export-preview iOS $look 1024 1024 1 "icon-preview/$look.png"
           done
       - uses: actions/upload-artifact@v4
         if: always()
