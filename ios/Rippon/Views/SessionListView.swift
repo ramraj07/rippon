@@ -24,8 +24,8 @@ struct SessionListView: View {
             if workspace.visibleSessions.isEmpty {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("No sessions on \(workspace.host?.label ?? "the host")").font(.headline)
-                        Text("Tap + to start one. Sessions an agent starts on the box show up here within seconds.")
+                        Text("No tmux sessions on \(workspace.host?.label ?? "the host")").font(.headline)
+                        Text("Tap + to start one. tmux sessions an agent starts on the box show up here within seconds.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 6)
@@ -48,11 +48,11 @@ struct SessionListView: View {
                                 if workspace.profile?.canHide == true {
                                     Button { workspace.setHidden(s.name, true) } label: { Label("Hide (keeps running)", systemImage: "eye.slash") }
                                 }
-                                Button(role: .destructive) { killing = s.name } label: { Label("Kill session", systemImage: "xmark.octagon") }
+                                Button(role: .destructive) { killing = s.name } label: { Label("Kill tmux session", systemImage: "xmark.octagon") }
                             }
                     }
                 } footer: {
-                    Text("Swipe to hide a session (it keeps running) or kill it.")
+                    Text("Swipe to hide a tmux session (it keeps running) or kill it.")
                 }
             }
             if !workspace.hiddenSessions.isEmpty {
@@ -68,7 +68,7 @@ struct SessionListView: View {
             }
         }
         .refreshable { await workspace.refresh() }
-        .navigationTitle("Sessions")
+        .navigationTitle("tmux sessions")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: String.self) { name in
             SessionView(name: name)
@@ -77,7 +77,7 @@ struct SessionListView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 ProfileMenu()
                 Button { creating = true } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("New session")
+                    .accessibilityLabel("New tmux session")
                     .keyboardShortcut("t", modifiers: .command)
                 Menu {
                     Button { workspace.showPreviews.toggle() } label: {
@@ -114,19 +114,19 @@ struct SessionListView: View {
             }
         }
         .sheet(isPresented: $creating) {
-            NameSheet(title: "New session", prompt: "Session name", initial: "", action: "Create") { name in
+            NameSheet(title: "New tmux session", prompt: "Session name", initial: "", action: "Create") { name in
                 if await workspace.createSession(name) { workspace.navPath.append(name) }
             }
         }
         .sheet(item: Binding(get: { renaming.map(Ident.init) }, set: { renaming = $0?.id })) { item in
-            NameSheet(title: "Rename session", prompt: "New name", initial: item.id, action: "Rename") { name in
+            NameSheet(title: "Rename tmux session", prompt: "New name", initial: item.id, action: "Rename") { name in
                 await workspace.renameSession(item.id, to: name)
             }
         }
-        .confirmationDialog("Kill session “\(killing ?? "")”?", isPresented: Binding(
+        .confirmationDialog("Kill tmux session “\(killing ?? "")”?", isPresented: Binding(
             get: { killing != nil }, set: { if !$0 { killing = nil } }), titleVisibility: .visible
         ) {
-            Button("Kill session", role: .destructive) {
+            Button("Kill tmux session", role: .destructive) {
                 if let k = killing { Task { await workspace.killSession(k) } }
             }
             if workspace.profile?.canHide == true {

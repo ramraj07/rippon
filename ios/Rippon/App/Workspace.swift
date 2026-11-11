@@ -27,7 +27,7 @@ final class Workspace: ObservableObject {
     @Published private(set) var mouseMode: Bool?
     /// Each session's screen as text, while previews are on.
     @Published private(set) var previews: [String: String] = [:]
-    @Published var showPreviews = UserDefaults.standard.bool(forKey: "showPreviews") {
+    @Published var showPreviews = UserDefaults.standard.object(forKey: "showPreviews") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(showPreviews, forKey: "showPreviews")
             if showPreviews { Task { await refreshPreviews() } } else { previews = [:] }
@@ -243,7 +243,7 @@ final class Workspace: ObservableObject {
             sessions = try await Tmux.list(c)
             mouseMode = try? await Tmux.mouseMode(c)
         } catch {
-            banner = "Could not list sessions: \(describe(error))"
+            banner = "Could not list tmux sessions: \(describe(error))"
         }
         await refreshPreviews()
     }
@@ -275,7 +275,7 @@ final class Workspace: ObservableObject {
             await refresh()
             return true
         } catch {
-            banner = "Could not create session “\(name)”: \(describe(error))"
+            banner = "Could not create tmux session “\(name)”: \(describe(error))"
             return false
         }
     }
@@ -288,7 +288,7 @@ final class Workspace: ObservableObject {
             try await Tmux.kill(c, name: name)
             edit { $0.forgetSession(name) }
         } catch {
-            banner = "Could not kill session “\(name)”: \(describe(error))"
+            banner = "Could not kill tmux session “\(name)”: \(describe(error))"
         }
         await refresh()
     }
