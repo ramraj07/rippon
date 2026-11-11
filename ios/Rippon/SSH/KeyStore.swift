@@ -10,22 +10,15 @@ struct SSHKeyInfo: Codable, Hashable, Identifiable {
     var id: String = UUID().uuidString
     var name: String
     var type: String
-    /// `ssh-ed25519 AAAA… name`, ready for `authorized_keys`. Empty for imported
-    /// RSA keys, whose public half Citadel cannot re-serialise.
+    /// `ssh-ed25519 AAAA… name`, ready for `authorized_keys`.
     var publicKey: String
 }
 
 enum KeyError: LocalizedError {
-    case unsupported(String)
     case missing
-    case unreadable(String)
 
     var errorDescription: String? {
-        switch self {
-        case .unsupported(let t): return "\(t) keys are not supported. Use an ed25519 key (or RSA)."
-        case .missing: return "The key for this host is no longer on this iPhone. Pick another in the host's settings."
-        case .unreadable(let why): return "Could not read the key: \(why)"
-        }
+        "The key for this host is no longer on this iPhone. Pick another in the host's settings."
     }
 }
 
@@ -58,33 +51,14 @@ final class KeyStore: ObservableObject {
         return info
     }
 
-    /// Import an OpenSSH private key (`-----BEGIN OPENSSH PRIVATE KEY-----`).
+    /// Import a private key: OpenSSH format, or PEM (PKCS#1, SEC1, PKCS#8,
+    /// encrypted or not) — so an AWS `.pem` works as it is.
     @discardableResult
     func importKey(name: String, text: String, passphrase: String) throws -> SSHKeyInfo {
         let pem = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let decryption = passphrase.isEmpty ? nil : Data(passphrase.utf8)
-        let type: SSHKeyType
-        do { type = try SSHKeyDetection.detectPrivateKeyType(from: pem) } catch {
-            throw KeyError.unreadable("not an OpenSSH private key (\(error))")
-        }
-        var publicLine = ""
+        let parsed = try PrivateKeyParser.parse(pem, passphrase: passphrase)
         let label = name.isEmpty ? "imported key" : name
-        do {
-            switch type {
-            case .ed25519:
-                let key = try Curve25519.Signing.PrivateKey(sshEd25519: pem, decryptionKey: decryption)
-                publicLine = KeyStore.publicLine(for: key, comment: label)
-            case .rsa:
-                _ = try Insecure.RSA.PrivateKey(sshRsa: pem, decryptionKey: decryption)
-            default:
-                throw KeyError.unsupported(type.description)
-            }
-        } catch let e as KeyError {
-            throw e
-        } catch {
-            throw KeyError.unreadable(passphrase.isEmpty ? "\(error). If the key has a passphrase, enter it." : "\(error)")
-        }
-        let info = SSHKeyInfo(name: label, type: type == .rsa ? "rsa" : "ed25519", publicKey: publicLine)
+        let info = SSHKeyInfo(name: label, type: parsed.typeName, publicKey: parsed.publicLine(comment: label))
         Keychain.set(Data(pem.utf8), account: "key.\(info.id)")
         if !passphrase.isEmpty { Keychain.set(Data(passphrase.utf8), account: "keypass.\(info.id)") }
         keys.append(info)
@@ -116,15 +90,8 @@ final class KeyStore: ObservableObject {
             guard let id = host.keyID,
                   let data = Keychain.get(account: "key.\(id)"),
                   let pem = String(data: data, encoding: .utf8) else { throw KeyError.missing }
-            let pass = Keychain.get(account: "keypass.\(id)")
-            switch try SSHKeyDetection.detectPrivateKeyType(from: pem) {
-            case .ed25519:
-                return .ed25519(username: user, privateKey: try Curve25519.Signing.PrivateKey(sshEd25519: pem, decryptionKey: pass))
-            case .rsa:
-                return .rsa(username: user, privateKey: try Insecure.RSA.PrivateKey(sshRsa: pem, decryptionKey: pass))
-            case let other:
-                throw KeyError.unsupported(other.description)
-            }
+            let pass = Keychain.get(account: "keypass.\(id)").map { String(decoding: $0, as: UTF8.self) } ?? ""
+            return try PrivateKeyParser.parse(pem, passphrase: pass).authentication(username: user)
         }
     }
 

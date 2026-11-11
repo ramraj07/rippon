@@ -33,7 +33,7 @@ struct KeysView: View {
                 }
                 .onDelete { idx in idx.map { keys.keys[$0].id }.forEach(keys.delete) }
             } footer: {
-                Text("Private keys stay in this iPhone's Keychain and never leave it. Add a key's public half to ~/.ssh/authorized_keys on the host. ed25519 is recommended: RSA keys sign with SHA-1, which recent OpenSSH servers refuse by default.")
+                Text("Private keys stay in this iPhone's Keychain and never leave it. Add a key's public half to ~/.ssh/authorized_keys on the host. Imported keys can be OpenSSH or PEM files (an AWS .pem works as it is): ed25519, ECDSA or RSA. RSA keys sign with SHA-256 (rsa-sha2-256).")
             }
         }
         .navigationTitle("SSH keys")
@@ -77,7 +77,7 @@ struct ImportKeyView: View {
                         .autocorrectionDisabled()
                     Button("Choose a file…") { picking = true }
                 } header: { Text("Private key") } footer: {
-                    Text("Paste the contents of a file like ~/.ssh/id_ed25519 — it starts with -----BEGIN OPENSSH PRIVATE KEY-----.")
+                    Text("Paste or choose a private key file: ~/.ssh/id_ed25519, id_rsa, or a .pem. It starts with a -----BEGIN … PRIVATE KEY----- line.")
                 }
                 SecureField("Passphrase (if it has one)", text: $passphrase)
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }

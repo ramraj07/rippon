@@ -46,9 +46,15 @@ change under `ios/`.
   than your system `ssh`. That means no `~/.ssh/config` aliases, no agent, no ProxyJump and no
   1Password, so enter the real host name, user and port. Authenticate with a key, either generated
   on the phone (copy its public half into the host's `~/.ssh/authorized_keys`) or imported, or
-  with a password. Keys and passwords are kept in the Keychain on this device only. Use ed25519:
-  RSA keys are supported, but Citadel signs them with SHA-1 `ssh-rsa`, which OpenSSH 8.8 and later
-  refuse by default. ECDSA keys are not supported.
+  with a password. Keys and passwords are kept in the Keychain on this device only.
+- **Keys you can import**: OpenSSH files (`BEGIN OPENSSH PRIVATE KEY`) and PEM files —
+  `BEGIN RSA PRIVATE KEY`, `BEGIN EC PRIVATE KEY`, `BEGIN PRIVATE KEY` and `BEGIN ENCRYPTED
+  PRIVATE KEY` — so an AWS `.pem` works as it is. ed25519, ECDSA (P-256/384/521) and RSA keys
+  are all supported. RSA keys sign with `rsa-sha2-256`, as OpenSSH 8.8 and later require;
+  Citadel's own RSA support signs with SHA-1 `ssh-rsa`, which those servers refuse, so Rippon
+  does its own RSA signing. Passphrases work for PEM files (legacy OpenSSL `Proc-Type` encryption
+  and PKCS#8 PBES2) and for OpenSSH ed25519 keys. A passphrase-protected *OpenSSH-format* RSA or
+  ECDSA key can't be imported yet; remove the passphrase on a computer first (`ssh-keygen -p`).
 - **Host keys** are trusted on first use, like `known_hosts`. A changed key is refused, and you can
   forget the saved key from the host's settings.
 - **Background.** iOS suspends apps, so connections and forwards do not live on in the background.

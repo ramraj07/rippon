@@ -24,6 +24,9 @@ packages:
   swift-crypto:
     url: https://github.com/apple/swift-crypto.git
     from: 3.12.3
+  BigInt:
+    url: https://github.com/attaswift/BigInt.git
+    from: 5.2.0
 
 settings:
   base:
@@ -42,11 +45,12 @@ targets:
       - package: Citadel
       - package: SwiftTerm
       - package: swift-nio
-        products: [NIOCore, NIOPosix]
+        products: [NIOCore, NIOPosix, NIOFoundationCompat]
       - package: swift-nio-ssh
         product: NIOSSH
       - package: swift-crypto
         product: Crypto
+      - package: BigInt
     info:
       path: Rippon/Info.plist
       properties:
