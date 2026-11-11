@@ -17,7 +17,7 @@ enum Tmux {
     /// What is typed into the PTY's shell to put a session on screen. `exec` so
     /// detaching ends the channel; the leading space keeps it out of history.
     static func attachLine(_ session: String) -> String {
-        " exec tmux -u new-session -A -s \(session) \; set -s set-clipboard on\r"
+        " exec tmux -u new-session -A -s \(session) \\; set -s set-clipboard on\r"
     }
 
     static func list(_ c: SSHConnection) async throws -> [SessionInfo] {
