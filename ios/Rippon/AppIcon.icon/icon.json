@@ -104,7 +104,7 @@
               }
             }
           ],
-          "opacity": 0.92
+          "opacity": 0.95
         },
         {
           "name": "3-bottom-pane",
@@ -129,7 +129,7 @@
               }
             }
           ],
-          "opacity": 0.85
+          "opacity": 0.9
         }
       ],
       "lighting": "individual",
@@ -140,7 +140,7 @@
       "specular": true,
       "translucency": {
         "enabled": true,
-        "value": 0.5
+        "value": 0.2
       }
     }
   ],
