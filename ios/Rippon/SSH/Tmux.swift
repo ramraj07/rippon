@@ -79,4 +79,28 @@ enum Tmux {
     static func setMouseMode(_ c: SSHConnection, on: Bool) async throws {
         try await c.run("tmux set -g mouse \(on ? "on" : "off")", source: "tmux", label: "mouse \(on ? "on" : "off")")
     }
+
+    /// What each session shows right now, as plain text (one round trip for all
+    /// of them). Lines are kept as tmux prints them; blank lines at the bottom
+    /// are dropped, so a preview ends where the output does.
+    static func previews(_ c: SSHConnection, names: [String]) async throws -> [String: String] {
+        let names = names.filter(Names.isValid)
+        guard !names.isEmpty else { return [:] }
+        let script = "for s in \(names.joined(separator: " ")); do printf '\\036%s\\n' \"$s\"; tmux capture-pane -p -t \"=$s:\" 2>/dev/null; done"
+        let r = try await c.exec(script, timeout: 8)
+        var out: [String: String] = [:]
+        for block in String(decoding: r.stdout, as: UTF8.self).split(separator: "\u{1e}") {
+            var lines = block.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            guard !lines.isEmpty else { continue }
+            let name = lines.removeFirst()
+            lines = lines.map { l in
+                var l = l
+                while l.last == " " { l.removeLast() }
+                return l
+            }
+            while let last = lines.last, last.isEmpty { lines.removeLast() }
+            out[name] = lines.joined(separator: "\n")
+        }
+        return out
+    }
 }

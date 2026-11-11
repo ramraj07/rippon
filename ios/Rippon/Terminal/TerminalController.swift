@@ -60,6 +60,27 @@ final class TerminalController: NSObject, ObservableObject {
         scroller = TerminalScroller(view: view) { [weak self] lines, point in
             self?.scroll(lines: lines, at: point)
         }
+        links = TerminalLinks(view: view) { [weak self] url in self?.onOpenLink?(url) }
+        let bar = KeyBar(controller: self)
+        keyBar = bar
+        view.inputAccessoryView = bar
+    }
+
+    private weak var keyBar: KeyBar?
+    private var links: TerminalLinks?
+
+    /// Run a tmux command against this session; `{s}` stands for its exact
+    /// target. Fire and forget: tmux redraws the pane itself.
+    func tmux(_ command: String) {
+        Task { _ = await tmuxOutput(command) }
+    }
+
+    /// The same, returning what it printed, or nil if it failed.
+    func tmuxOutput(_ command: String) async -> String? {
+        guard let c = connection else { return nil }
+        let line = "tmux " + command.replacingOccurrences(of: "{s}", with: "=\(session)")
+        // `run` logs failures to SSH activity.
+        return try? await c.run(line, source: "tmux", label: String(command.prefix(40)))
     }
 
     func setFontSize(_ size: CGFloat) {
@@ -110,7 +131,10 @@ final class TerminalController: NSObject, ObservableObject {
                         switch chunk {
                         case .stdout(let b), .stderr(let b): bytes = Array(b.readableBytesView)
                         }
-                        await MainActor.run { self?.view.feed(byteArray: bytes[...]) }
+                        await MainActor.run {
+                            self?.view.feed(byteArray: bytes[...])
+                            self?.links?.screenChanged()
+                        }
                     }
                 }
             } catch is CancellationError {
@@ -161,6 +185,7 @@ final class TerminalController: NSObject, ObservableObject {
         }
         scroller?.stopMomentum()
         scroller?.clearSelection()
+        defer { keyBar?.refresh() }
         if heldKeys != nil {
             heldKeys! += bytes
             return
@@ -237,7 +262,10 @@ final class TerminalController: NSObject, ObservableObject {
 
 extension TerminalController: TerminalViewDelegate {
     nonisolated func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        MainActor.assumeIsolated { self.outgoing?.yield(.resize(cols: newCols, rows: newRows)) }
+        MainActor.assumeIsolated {
+            self.outgoing?.yield(.resize(cols: newCols, rows: newRows))
+            self.links?.screenChanged()
+        }
     }
 
     nonisolated func setTerminalTitle(source: TerminalView, title: String) {}

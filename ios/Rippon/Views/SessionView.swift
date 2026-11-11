@@ -40,7 +40,7 @@ struct SessionView: View {
                         Button("Smaller") { workspace.setFontSize(max(8, workspace.hosts.fontSize - 1)) }
                         Button("Default") { workspace.setFontSize(12) }
                     } label: { Label("Text size (\(Int(workspace.hosts.fontSize)))", systemImage: "textformat.size") }
-                    Button { terminal.send("\u{02}d") } label: { Label("Detach tmux (prefix d)", systemImage: "eject") }
+                    Button { terminal.detach() } label: { Label("Detach from tmux", systemImage: "eject") }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
         }
@@ -51,6 +51,8 @@ struct SessionView: View {
             if target == name {
                 pane = .browser
                 workspace.showBrowserFor = nil
+                // The tap that opened the link may also have raised the keyboard.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { _ = terminal.view.resignFirstResponder() }
             }
         }
     }

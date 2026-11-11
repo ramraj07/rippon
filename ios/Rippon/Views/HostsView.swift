@@ -96,8 +96,8 @@ struct HostEditorView: View {
             Section {
                 TextField("e.g. claude", text: $host.newSessionCommand)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().font(.body.monospaced())
-            } header: { Text("New session command") } footer: {
-                Text("Runs inside each session you create from the app.")
+            } header: { Text("New tmux session command") } footer: {
+                Text("Runs inside each tmux session you create from the app.")
             }
 
             Section {
